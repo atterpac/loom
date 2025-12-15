@@ -3,8 +3,10 @@ package view
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/atterpac/temportui/internal/config"
 	"github.com/atterpac/temportui/internal/temporal"
 	"github.com/atterpac/temportui/internal/ui"
 	"github.com/gdamore/tcell/v2"
@@ -20,7 +22,8 @@ type WorkflowList struct {
 	leftPanel     *ui.Panel
 	rightPanel    *ui.Panel
 	preview       *tview.TextView
-	workflows     []temporal.Workflow
+	allWorkflows  []temporal.Workflow // Full unfiltered list
+	workflows     []temporal.Workflow // Filtered list for display
 	filterText    string
 	loading       bool
 	autoRefresh   bool
@@ -48,13 +51,13 @@ func NewWorkflowList(app *App, namespace string) *WorkflowList {
 func (wl *WorkflowList) setup() {
 	wl.table.SetHeaders("WORKFLOW ID", "TYPE", "STATUS", "START TIME")
 	wl.table.SetBorder(false)
-	wl.table.SetBackgroundColor(ui.ColorBg)
-	wl.SetBackgroundColor(ui.ColorBg)
+	wl.table.SetBackgroundColor(ui.ColorBg())
+	wl.SetBackgroundColor(ui.ColorBg())
 
 	// Configure preview
 	wl.preview.SetDynamicColors(true)
-	wl.preview.SetBackgroundColor(ui.ColorBg)
-	wl.preview.SetTextColor(ui.ColorFg)
+	wl.preview.SetBackgroundColor(ui.ColorBg())
+	wl.preview.SetTextColor(ui.ColorFg())
 	wl.preview.SetWordWrap(true)
 
 	// Create panels
@@ -76,6 +79,17 @@ func (wl *WorkflowList) setup() {
 		if row >= 0 && row < len(wl.workflows) {
 			wf := wl.workflows[row]
 			wl.app.NavigateToWorkflowDetail(wf.ID, wf.RunID)
+		}
+	})
+
+	// Register for theme changes
+	ui.OnThemeChange(func(_ *config.ParsedTheme) {
+		wl.SetBackgroundColor(ui.ColorBg())
+		wl.preview.SetBackgroundColor(ui.ColorBg())
+		wl.preview.SetTextColor(ui.ColorFg())
+		// Re-render table with new colors
+		if len(wl.workflows) > 0 {
+			wl.populateTable()
 		}
 	})
 
@@ -134,22 +148,22 @@ func (wl *WorkflowList) updatePreview(w temporal.Workflow) {
 
 [%s]Run ID[-]
 [%s]%s[-]`,
-		ui.TagPanelTitle,
-		ui.TagFg, truncate(w.ID, 35),
-		ui.TagFgDim,
+		ui.TagPanelTitle(),
+		ui.TagFg(), truncate(w.ID, 35),
+		ui.TagFgDim(),
 		statusColor, statusIcon, w.Status,
-		ui.TagFgDim,
-		ui.TagFg, w.Type,
-		ui.TagFgDim,
-		ui.TagFg, formatRelativeTime(now, w.StartTime),
-		ui.TagFgDim,
-		ui.TagFg, endTimeStr,
-		ui.TagFgDim,
-		ui.TagFg, durationStr,
-		ui.TagFgDim,
-		ui.TagFg, w.TaskQueue,
-		ui.TagFgDim,
-		ui.TagFgDim, truncate(w.RunID, 30),
+		ui.TagFgDim(),
+		ui.TagFg(), w.Type,
+		ui.TagFgDim(),
+		ui.TagFg(), formatRelativeTime(now, w.StartTime),
+		ui.TagFgDim(),
+		ui.TagFg(), endTimeStr,
+		ui.TagFgDim(),
+		ui.TagFg(), durationStr,
+		ui.TagFgDim(),
+		ui.TagFg(), w.TaskQueue,
+		ui.TagFgDim(),
+		ui.TagFgDim(), truncate(w.RunID, 30),
 	)
 	wl.preview.SetText(text)
 }
@@ -173,7 +187,6 @@ func (wl *WorkflowList) loadData() {
 
 		opts := temporal.ListOptions{
 			PageSize: 100,
-			Query:    wl.filterText,
 		}
 		workflows, _, err := provider.ListWorkflows(ctx, wl.namespace, opts)
 
@@ -183,17 +196,36 @@ func (wl *WorkflowList) loadData() {
 				wl.showError(err)
 				return
 			}
-			wl.workflows = workflows
-			wl.populateTable()
-			wl.updateStats()
+			wl.allWorkflows = workflows
+			wl.applyFilter()
 		})
 	}()
+}
+
+// applyFilter filters allWorkflows based on filterText and updates the display.
+func (wl *WorkflowList) applyFilter() {
+	if wl.filterText == "" {
+		wl.workflows = wl.allWorkflows
+	} else {
+		filter := strings.ToLower(wl.filterText)
+		wl.workflows = nil
+		for _, w := range wl.allWorkflows {
+			// Match against workflow ID, type, or status
+			if strings.Contains(strings.ToLower(w.ID), filter) ||
+				strings.Contains(strings.ToLower(w.Type), filter) ||
+				strings.Contains(strings.ToLower(w.Status), filter) {
+				wl.workflows = append(wl.workflows, w)
+			}
+		}
+	}
+	wl.populateTable()
+	wl.updateStats()
 }
 
 func (wl *WorkflowList) loadMockData() {
 	// Mock data fallback when no provider is configured
 	now := time.Now()
-	wl.workflows = []temporal.Workflow{
+	wl.allWorkflows = []temporal.Workflow{
 		{
 			ID: "order-processing-abc123", RunID: "run-001-xyz", Type: "OrderWorkflow",
 			Status: "Running", Namespace: wl.namespace, TaskQueue: "order-tasks",
@@ -220,8 +252,7 @@ func (wl *WorkflowList) loadMockData() {
 			StartTime: now.Add(-2 * time.Hour), EndTime: ptr(now.Add(-1*time.Hour - 45*time.Minute)),
 		},
 	}
-	wl.populateTable()
-	wl.updateStats()
+	wl.applyFilter()
 }
 
 func ptr[T any](v T) *T {
@@ -270,7 +301,7 @@ func (wl *WorkflowList) updateStats() {
 func (wl *WorkflowList) showError(err error) {
 	wl.table.ClearRows()
 	wl.table.SetHeaders("WORKFLOW ID", "TYPE", "STATUS", "START TIME")
-	wl.table.AddColoredRow(ui.ColorFailed,
+	wl.table.AddColoredRow(ui.ColorFailed(),
 		ui.IconFailed+" Error loading workflows",
 		err.Error(),
 		"",
@@ -367,26 +398,36 @@ func (wl *WorkflowList) Hints() []ui.KeyHint {
 }
 
 func (wl *WorkflowList) showFilter() {
-	// Create filter input with styling
-	input := tview.NewInputField().
-		SetLabel(" " + ui.IconArrowRight + " Filter: ").
-		SetFieldWidth(30).
-		SetFieldBackgroundColor(ui.ColorBgLight).
-		SetFieldTextColor(ui.ColorFg).
-		SetLabelColor(ui.ColorAccent)
+	// Set up command bar callbacks
+	cb := wl.app.UI().CommandBar()
 
-	input.SetDoneFunc(func(key tcell.Key) {
-		if key == tcell.KeyEnter {
-			wl.filterText = input.GetText()
-			wl.loadData() // Reload with filter
-		}
-		// Remove input and restore focus
-		wl.RemoveItem(input)
-		wl.app.UI().SetFocus(wl.table)
+	// Live filtering as user types
+	cb.SetOnChange(func(text string) {
+		wl.filterText = text
+		wl.applyFilter()
 	})
 
-	wl.AddItem(input, 1, 0, false)
-	wl.app.UI().SetFocus(input)
+	cb.SetOnSubmit(func(cmd ui.CommandType, text string) {
+		wl.filterText = text
+		wl.applyFilter()
+	})
+
+	cb.SetOnCancel(func() {
+		wl.closeFilter()
+	})
+
+	// Show the command bar with filter mode
+	wl.app.UI().ShowCommandBar(ui.CommandFilter)
+
+	// Pre-fill with existing filter text if any
+	if wl.filterText != "" {
+		cb.SetText(wl.filterText)
+	}
+}
+
+func (wl *WorkflowList) closeFilter() {
+	wl.app.UI().HideCommandBar()
+	wl.app.UI().SetFocus(wl.table)
 }
 
 func formatRelativeTime(now time.Time, t time.Time) string {
