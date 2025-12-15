@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/atterpac/temportui/internal/config"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -19,10 +20,18 @@ func NewPanel(title string) *Panel {
 	p := &Panel{
 		Box:         tview.NewBox(),
 		title:       title,
-		borderColor: ColorPanelBorder,
-		titleColor:  ColorPanelTitle,
+		borderColor: ColorPanelBorder(),
+		titleColor:  ColorPanelTitle(),
 	}
-	p.SetBackgroundColor(ColorBg)
+	p.SetBackgroundColor(ColorBg())
+
+	// Register for theme changes
+	OnThemeChange(func(_ *config.ParsedTheme) {
+		p.borderColor = ColorPanelBorder()
+		p.titleColor = ColorPanelTitle()
+		p.SetBackgroundColor(ColorBg())
+	})
+
 	return p
 }
 
@@ -59,8 +68,8 @@ func (p *Panel) Draw(screen tcell.Screen) {
 		return
 	}
 
-	borderStyle := tcell.StyleDefault.Foreground(p.borderColor).Background(ColorBg)
-	titleStyle := tcell.StyleDefault.Foreground(p.titleColor).Background(ColorBg).Bold(true)
+	borderStyle := tcell.StyleDefault.Foreground(p.borderColor).Background(ColorBg())
+	titleStyle := tcell.StyleDefault.Foreground(p.titleColor).Background(ColorBg()).Bold(true)
 
 	// Draw corners
 	screen.SetContent(x, y, '╭', nil, borderStyle)

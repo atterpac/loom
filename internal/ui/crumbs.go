@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/atterpac/temportui/internal/config"
 	"github.com/rivo/tview"
 )
 
@@ -20,10 +21,22 @@ func NewCrumbs() *Crumbs {
 		path:     []string{},
 	}
 	c.SetDynamicColors(true)
-	c.SetBackgroundColor(ColorBg)
-	c.SetTextColor(ColorCrumb)
+	c.applyTheme()
 	c.render()
+
+	// Register for theme changes
+	OnThemeChange(func(_ *config.ParsedTheme) {
+		c.applyTheme()
+		c.render()
+	})
+
 	return c
+}
+
+// applyTheme applies the current theme colors to the crumbs.
+func (c *Crumbs) applyTheme() {
+	c.SetBackgroundColor(ColorBg())
+	c.SetTextColor(ColorCrumb())
 }
 
 // SetPath sets the breadcrumb path.
@@ -66,10 +79,10 @@ func (c *Crumbs) render() {
 	for i, segment := range c.path {
 		if i == len(c.path)-1 {
 			// Last segment is highlighted
-			parts = append(parts, fmt.Sprintf("[%s]%s[-]", TagAccent, segment))
+			parts = append(parts, fmt.Sprintf("[%s]%s[-]", TagAccent(), segment))
 		} else {
 			// Previous segments are dimmed
-			parts = append(parts, fmt.Sprintf("[%s]%s[-]", TagFgDim, segment))
+			parts = append(parts, fmt.Sprintf("[%s]%s[-]", TagFgDim(), segment))
 		}
 	}
 

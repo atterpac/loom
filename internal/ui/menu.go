@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/atterpac/temportui/internal/config"
 	"github.com/rivo/tview"
 )
 
@@ -20,10 +21,22 @@ func NewMenu() *Menu {
 		hints:    []KeyHint{},
 	}
 	m.SetDynamicColors(true)
-	m.SetBackgroundColor(ColorMenu)
-	m.SetTextColor(ColorFg)
+	m.applyTheme()
 	m.render()
+
+	// Register for theme changes
+	OnThemeChange(func(_ *config.ParsedTheme) {
+		m.applyTheme()
+		m.render()
+	})
+
 	return m
+}
+
+// applyTheme applies the current theme colors to the menu.
+func (m *Menu) applyTheme() {
+	m.SetBackgroundColor(ColorMenu())
+	m.SetTextColor(ColorFg())
 }
 
 // SetHints sets the keybinding hints to display.
@@ -53,7 +66,7 @@ func (m *Menu) render() {
 	var parts []string
 	for _, h := range m.hints {
 		// Charm-style: key followed by label, simple spacing
-		part := fmt.Sprintf("[%s::b]%s[-:-:-] [%s]%s[-]", TagKey, h.Key, TagFgDim, h.Description)
+		part := fmt.Sprintf("[%s::b]%s[-:-:-] [%s]%s[-]", TagKey(), h.Key, TagFgDim(), h.Description)
 		parts = append(parts, part)
 	}
 

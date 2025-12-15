@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 
+	"github.com/atterpac/temportui/internal/config"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -21,20 +22,54 @@ func NewTable() *Table {
 	t := &Table{
 		Table:       tview.NewTable(),
 		actions:     NewActionRegistry(),
-		selectColor: ColorHighlight,
+		selectColor: ColorHighlight(),
 	}
 	t.SetSelectable(true, false)
 	t.SetBorders(false)
 	t.SetFixed(1, 0) // Fixed header row
-	t.SetBackgroundColor(ColorBg)
-	t.SetBorderColor(ColorBorder)
-	t.SetBordersColor(ColorBorder)
+	t.applyTheme()
+
+	// Register for theme changes
+	OnThemeChange(func(_ *config.ParsedTheme) {
+		t.applyTheme()
+	})
+
+	return t
+}
+
+// applyTheme applies the current theme colors to the table.
+func (t *Table) applyTheme() {
+	t.selectColor = ColorHighlight()
+	t.SetBackgroundColor(ColorBg())
+	t.SetBorderColor(ColorBorder())
+	t.SetBordersColor(ColorBorder())
 	t.SetSelectedStyle(tcell.StyleDefault.
-		Foreground(ColorFg).
+		Foreground(ColorFg()).
 		Background(t.selectColor).
 		Bold(true))
-	t.SetSeparator(' ')
-	return t
+
+	// Update all existing cells
+	t.RefreshColors()
+}
+
+// RefreshColors updates all cell colors to match current theme.
+// Call this after theme changes to update the display.
+func (t *Table) RefreshColors() {
+	rowCount := t.GetRowCount()
+	colCount := t.GetColumnCount()
+	for row := 0; row < rowCount; row++ {
+		for col := 0; col < colCount; col++ {
+			cell := t.GetCell(row, col)
+			if cell != nil {
+				// Update background color for all cells
+				cell.SetBackgroundColor(ColorBg())
+				// Header row gets dim text, data rows get default fg
+				if row == 0 {
+					cell.SetTextColor(ColorFgDim())
+				}
+			}
+		}
+	}
 }
 
 // SetHeaders sets the table column headers.
@@ -43,8 +78,8 @@ func (t *Table) SetHeaders(headers ...string) {
 	for i, h := range headers {
 		// Charm-style: lowercase headers, subtle styling
 		cell := tview.NewTableCell(" " + strings.ToLower(h)).
-			SetTextColor(ColorFgDim).
-			SetBackgroundColor(ColorBg).
+			SetTextColor(ColorFgDim()).
+			SetBackgroundColor(ColorBg()).
 			SetSelectable(false).
 			SetExpansion(1)
 		t.SetCell(0, i, cell)
@@ -56,8 +91,8 @@ func (t *Table) AddRow(values ...string) int {
 	row := t.GetRowCount()
 	for i, v := range values {
 		cell := tview.NewTableCell(" " + v).
-			SetTextColor(ColorFg).
-			SetBackgroundColor(ColorBg).
+			SetTextColor(ColorFg()).
+			SetBackgroundColor(ColorBg()).
 			SetExpansion(1)
 		t.SetCell(row, i, cell)
 	}
@@ -70,7 +105,7 @@ func (t *Table) AddColoredRow(color tcell.Color, values ...string) int {
 	for i, v := range values {
 		cell := tview.NewTableCell(" " + v).
 			SetTextColor(color).
-			SetBackgroundColor(ColorBg).
+			SetBackgroundColor(ColorBg()).
 			SetExpansion(1)
 		t.SetCell(row, i, cell)
 	}
@@ -91,12 +126,12 @@ func (t *Table) AddStyledRow(status string, values ...string) int {
 		if v == status {
 			displayValue = " " + icon + " " + v
 		} else {
-			cellColor = ColorFg
+			cellColor = ColorFg()
 		}
 
 		cell := tview.NewTableCell(displayValue).
 			SetTextColor(cellColor).
-			SetBackgroundColor(ColorBg).
+			SetBackgroundColor(ColorBg()).
 			SetExpansion(1)
 		t.SetCell(row, i, cell)
 	}

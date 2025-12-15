@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 
+	"github.com/atterpac/temportui/internal/config"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -25,7 +26,13 @@ func NewStatsBar() *StatsBar {
 		namespace: "default",
 		connected: true,
 	}
-	s.SetBackgroundColor(ColorBg)
+	s.SetBackgroundColor(ColorBg())
+
+	// Register for theme changes
+	OnThemeChange(func(_ *config.ParsedTheme) {
+		s.SetBackgroundColor(ColorBg())
+	})
+
 	return s
 }
 
@@ -60,10 +67,10 @@ func (s *StatsBar) Draw(screen tcell.Screen) {
 		return
 	}
 
-	borderStyle := tcell.StyleDefault.Foreground(ColorPanelBorder).Background(ColorBg)
-	titleStyle := tcell.StyleDefault.Foreground(ColorPanelTitle).Background(ColorBg).Bold(true)
-	textStyle := tcell.StyleDefault.Foreground(ColorFg).Background(ColorBg)
-	dimStyle := tcell.StyleDefault.Foreground(ColorFgDim).Background(ColorBg)
+	borderStyle := tcell.StyleDefault.Foreground(ColorPanelBorder()).Background(ColorBg())
+	titleStyle := tcell.StyleDefault.Foreground(ColorPanelTitle()).Background(ColorBg()).Bold(true)
+	textStyle := tcell.StyleDefault.Foreground(ColorFg()).Background(ColorBg())
+	dimStyle := tcell.StyleDefault.Foreground(ColorFgDim()).Background(ColorBg())
 
 	// Draw rounded border
 	screen.SetContent(x, y, '╭', nil, borderStyle)
@@ -99,11 +106,11 @@ func (s *StatsBar) Draw(screen tcell.Screen) {
 	// Connection status
 	connIcon := IconConnected
 	connText := "connected"
-	connStyle := tcell.StyleDefault.Foreground(ColorCompleted).Background(ColorBg)
+	connStyle := tcell.StyleDefault.Foreground(ColorCompleted()).Background(ColorBg())
 	if !s.connected {
 		connIcon = IconDisconnected
 		connText = "disconnected"
-		connStyle = tcell.StyleDefault.Foreground(ColorFailed).Background(ColorBg)
+		connStyle = tcell.StyleDefault.Foreground(ColorFailed()).Background(ColorBg())
 	}
 
 	// Draw namespace
@@ -151,11 +158,11 @@ func (s *StatsBar) buildStatsText() string {
 }
 
 func (s *StatsBar) drawStats(screen tcell.Screen, x, y int) {
-	labelStyle := tcell.StyleDefault.Foreground(ColorFgDim).Background(ColorBg)
-	runningStyle := tcell.StyleDefault.Foreground(ColorRunning).Background(ColorBg)
-	completedStyle := tcell.StyleDefault.Foreground(ColorCompleted).Background(ColorBg)
-	failedStyle := tcell.StyleDefault.Foreground(ColorFailed).Background(ColorBg)
-	accentStyle := tcell.StyleDefault.Foreground(ColorAccentDim).Background(ColorBg)
+	labelStyle := tcell.StyleDefault.Foreground(ColorFgDim()).Background(ColorBg())
+	runningStyle := tcell.StyleDefault.Foreground(ColorRunning()).Background(ColorBg())
+	completedStyle := tcell.StyleDefault.Foreground(ColorCompleted()).Background(ColorBg())
+	failedStyle := tcell.StyleDefault.Foreground(ColorFailed()).Background(ColorBg())
+	accentStyle := tcell.StyleDefault.Foreground(ColorAccentDim()).Background(ColorBg())
 
 	// Running
 	x = s.drawText(screen, x, y, "Running: ", labelStyle)
