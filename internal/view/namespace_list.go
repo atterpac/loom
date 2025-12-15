@@ -1,0 +1,203 @@
+package view
+
+import (
+	"context"
+	"time"
+
+	"github.com/atterpac/temportui/internal/temporal"
+	"github.com/atterpac/temportui/internal/ui"
+	"github.com/gdamore/tcell/v2"
+)
+
+// NamespaceList displays a list of Temporal namespaces.
+type NamespaceList struct {
+	*ui.Table
+	app           *App
+	namespaces    []temporal.Namespace
+	loading       bool
+	autoRefresh   bool
+	refreshTicker *time.Ticker
+	stopRefresh   chan struct{}
+}
+
+// NewNamespaceList creates a new namespace list view.
+func NewNamespaceList(app *App) *NamespaceList {
+	nl := &NamespaceList{
+		Table:       ui.NewTable(),
+		app:         app,
+		namespaces:  []temporal.Namespace{},
+		stopRefresh: make(chan struct{}),
+	}
+	nl.setup()
+	return nl
+}
+
+func (nl *NamespaceList) setup() {
+	nl.SetHeaders("NAME", "STATE", "RETENTION")
+	nl.SetBorder(false) // Charm-style: borderless
+	nl.SetBackgroundColor(ui.ColorBg)
+
+	// Selection handler
+	nl.SetOnSelect(func(row int) {
+		if row >= 0 && row < len(nl.namespaces) {
+			nl.app.NavigateToWorkflows(nl.namespaces[row].Name)
+		}
+	})
+}
+
+func (nl *NamespaceList) setLoading(loading bool) {
+	nl.loading = loading
+	// Loading state shown via breadcrumb or status, not title
+}
+
+func (nl *NamespaceList) loadData() {
+	provider := nl.app.Provider()
+	if provider == nil {
+		// Fallback to mock data if no provider
+		nl.loadMockData()
+		return
+	}
+
+	nl.setLoading(true)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		namespaces, err := provider.ListNamespaces(ctx)
+
+		nl.app.UI().QueueUpdateDraw(func() {
+			nl.setLoading(false)
+			if err != nil {
+				nl.showError(err)
+				return
+			}
+			nl.namespaces = namespaces
+			nl.populateTable()
+		})
+	}()
+}
+
+func (nl *NamespaceList) loadMockData() {
+	// Mock data fallback when no provider is configured
+	nl.namespaces = []temporal.Namespace{
+		{Name: "default", State: "Active", RetentionPeriod: "7 days"},
+		{Name: "production", State: "Active", RetentionPeriod: "30 days"},
+		{Name: "staging", State: "Active", RetentionPeriod: "3 days"},
+		{Name: "development", State: "Active", RetentionPeriod: "1 day"},
+		{Name: "archived", State: "Deprecated", RetentionPeriod: "90 days"},
+	}
+	nl.populateTable()
+}
+
+func (nl *NamespaceList) populateTable() {
+	nl.ClearRows()
+	nl.SetHeaders("NAME", "STATE", "RETENTION")
+
+	for _, ns := range nl.namespaces {
+		stateIcon := ui.IconConnected
+		color := ui.ColorCompleted
+		if ns.State == "Deprecated" {
+			stateIcon = ui.IconDisconnected
+			color = ui.ColorFgDim
+		}
+		nl.AddColoredRow(color,
+			ui.IconNamespace+" "+ns.Name,
+			stateIcon+" "+ns.State,
+			ns.RetentionPeriod,
+		)
+	}
+
+	if nl.RowCount() > 0 {
+		nl.SelectRow(0)
+	}
+}
+
+func (nl *NamespaceList) showError(err error) {
+	nl.ClearRows()
+	nl.SetHeaders("NAME", "STATE", "RETENTION")
+	nl.AddColoredRow(ui.ColorFailed,
+		ui.IconFailed+" Error loading namespaces",
+		err.Error(),
+		"",
+	)
+}
+
+func (nl *NamespaceList) toggleAutoRefresh() {
+	nl.autoRefresh = !nl.autoRefresh
+	if nl.autoRefresh {
+		nl.startAutoRefresh()
+	} else {
+		nl.stopAutoRefresh()
+	}
+}
+
+func (nl *NamespaceList) startAutoRefresh() {
+	nl.refreshTicker = time.NewTicker(5 * time.Second)
+	go func() {
+		for {
+			select {
+			case <-nl.refreshTicker.C:
+				nl.app.UI().QueueUpdateDraw(func() {
+					nl.loadData()
+				})
+			case <-nl.stopRefresh:
+				return
+			}
+		}
+	}()
+}
+
+func (nl *NamespaceList) stopAutoRefresh() {
+	if nl.refreshTicker != nil {
+		nl.refreshTicker.Stop()
+		nl.refreshTicker = nil
+	}
+	// Signal stop to the goroutine
+	select {
+	case nl.stopRefresh <- struct{}{}:
+	default:
+	}
+}
+
+// Name returns the view name.
+func (nl *NamespaceList) Name() string {
+	return "namespaces"
+}
+
+// Start is called when the view becomes active.
+func (nl *NamespaceList) Start() {
+	nl.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Rune() {
+		case 'q':
+			nl.app.UI().Stop()
+			return nil
+		case 'a':
+			nl.toggleAutoRefresh()
+			return nil
+		case 'r':
+			nl.loadData()
+			return nil
+		}
+		return event
+	})
+	// Load data when view becomes active
+	nl.loadData()
+}
+
+// Stop is called when the view is deactivated.
+func (nl *NamespaceList) Stop() {
+	nl.SetInputCapture(nil)
+	nl.stopAutoRefresh()
+}
+
+// Hints returns keybinding hints for this view.
+func (nl *NamespaceList) Hints() []ui.KeyHint {
+	return []ui.KeyHint{
+		{Key: "enter", Description: "Select"},
+		{Key: "r", Description: "Refresh"},
+		{Key: "a", Description: "Auto-refresh"},
+		{Key: "j/k", Description: "Navigate"},
+		{Key: "q", Description: "Quit"},
+		{Key: "?", Description: "Help"},
+	}
+}
