@@ -1,7 +1,7 @@
 package ui
 
 import (
-	"github.com/atterpac/temportui/internal/config"
+	"github.com/atterpac/loom/internal/config"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -12,7 +12,10 @@ type CommandType int
 const (
 	CommandNone CommandType = iota
 	CommandFilter
-	CommandAction // For future : commands
+	CommandAction     // For : commands
+	CommandProfile    // For profile management (:profile)
+	CommandQuery      // For workflow queries (:query)
+	CommandVisibility // For visibility query with autocomplete
 )
 
 // CommandBar provides a k9s-style command/filter input bar with matching StatsBar styling.
@@ -136,6 +139,8 @@ func (cb *CommandBar) Draw(screen tcell.Screen) {
 		title = " Filter "
 	case CommandAction:
 		title = " Command "
+	case CommandProfile:
+		title = " Profile "
 	default:
 		title = " Input "
 	}
@@ -159,6 +164,8 @@ func (cb *CommandBar) Draw(screen tcell.Screen) {
 		prompt = IconArrowRight + " /"
 	case CommandAction:
 		prompt = IconArrowRight + " :"
+	case CommandProfile:
+		prompt = IconArrowRight + " :profile "
 	default:
 		prompt = IconArrowRight + " "
 	}

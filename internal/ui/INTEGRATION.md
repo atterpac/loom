@@ -1,6 +1,6 @@
 # UI Integration Guide
 
-This document describes how to integrate the temporal-tui UI components with real Temporal data.
+This document describes how to integrate the loom UI components with real Temporal data.
 
 ## Architecture Overview
 
@@ -174,7 +174,7 @@ Modify the view constructors to accept a data provider:
 // internal/view/app.go
 package view
 
-import "github.com/atterpac/temportui/internal/temporal"
+import "github.com/atterpac/loom/internal/temporal"
 
 type App struct {
     ui       *ui.App
@@ -345,8 +345,8 @@ import (
     "fmt"
     "os"
 
-    "github.com/atterpac/temportui/internal/temporal"
-    "github.com/atterpac/temportui/internal/view"
+    "github.com/atterpac/loom/internal/temporal"
+    "github.com/atterpac/loom/internal/view"
 )
 
 func main() {
@@ -447,7 +447,7 @@ func (wd *WorkflowDetail) confirmCancel() {
 ## File Structure After Integration
 
 ```
-temporal-tui/
+loom/
 ├── cmd/
 │   └── main.go                 # CLI flags, provider init
 ├── internal/

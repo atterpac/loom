@@ -3,16 +3,54 @@ package ui
 import (
 	"sync"
 
-	"github.com/atterpac/temportui/internal/config"
+	"github.com/atterpac/loom/internal/config"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
 var (
-	activeTheme    *config.ParsedTheme
-	themeListeners []func(*config.ParsedTheme)
-	themeMu        sync.RWMutex
+	activeTheme *config.ParsedTheme
+	themeMu     sync.RWMutex
+	// appInstance holds a reference to the tview.Application for safe UI updates
+	appInstance *tview.Application
+	appMu       sync.RWMutex
 )
+
+// SetAppInstance sets the tview.Application instance for safe UI updates.
+// This should be called once during app initialization.
+func SetAppInstance(app *tview.Application) {
+	appMu.Lock()
+	appInstance = app
+	appMu.Unlock()
+}
+
+// QueueUpdate safely queues a function to run on the main UI thread.
+// If no app instance is set, the function runs immediately (for tests/init).
+func QueueUpdate(fn func()) {
+	appMu.RLock()
+	app := appInstance
+	appMu.RUnlock()
+
+	if app != nil {
+		app.QueueUpdate(fn)
+	} else {
+		fn()
+	}
+}
+
+// QueueUpdateDraw safely queues a function and triggers a redraw.
+// If no app instance is set, the function runs immediately (for tests/init).
+func QueueUpdateDraw(fn func()) {
+	appMu.RLock()
+	app := appInstance
+	appMu.RUnlock()
+
+	if app != nil {
+		app.QueueUpdateDraw(fn)
+	} else {
+		fn()
+	}
+}
 
 // InitTheme initializes the theme system with the given theme name.
 // Must be called before any UI components are created.
@@ -30,7 +68,9 @@ func InitTheme(name string) error {
 	return nil
 }
 
-// SetTheme switches to a new theme and notifies all listeners.
+// SetTheme switches to a new theme atomically.
+// This updates all global styles. Components read colors dynamically at draw time,
+// so no explicit redraw is needed - tview's event loop handles it.
 func SetTheme(name string) error {
 	theme, err := config.LoadTheme(name)
 	if err != nil {
@@ -39,36 +79,12 @@ func SetTheme(name string) error {
 
 	themeMu.Lock()
 	activeTheme = theme
-	listeners := make([]func(*config.ParsedTheme), len(themeListeners))
-	copy(listeners, themeListeners)
 	themeMu.Unlock()
 
+	// Apply global tview styles atomically
 	applyGlobalStyles()
 
-	// Notify all registered listeners
-	for _, fn := range listeners {
-		fn(theme)
-	}
-
 	return nil
-}
-
-// OnThemeChange registers a callback to be called when the theme changes.
-// Returns an unsubscribe function.
-func OnThemeChange(fn func(*config.ParsedTheme)) func() {
-	themeMu.Lock()
-	themeListeners = append(themeListeners, fn)
-	index := len(themeListeners) - 1
-	themeMu.Unlock()
-
-	// Return unsubscribe function
-	return func() {
-		themeMu.Lock()
-		defer themeMu.Unlock()
-		if index < len(themeListeners) {
-			themeListeners = append(themeListeners[:index], themeListeners[index+1:]...)
-		}
-	}
 }
 
 // ActiveTheme returns the current active theme.
@@ -460,6 +476,7 @@ const (
 	IconConnected    = "\uf1e6" // nf-fa-plug
 	IconDisconnected = "\uf127" // nf-fa-chain_broken
 	IconActivity     = "\uf013" // nf-fa-cog
+	IconHeart        = "\uf004" // nf-fa-heart
 	IconWorkflow     = "\uf0e7" // nf-fa-bolt
 	IconNamespace    = "\uf0e8" // nf-fa-sitemap
 	IconTaskQueue    = "\uf0ae" // nf-fa-tasks
@@ -472,13 +489,28 @@ const (
 	BoxBottomRight = "\u256f"
 	BoxHorizontal  = "\u2500"
 	BoxVertical    = "\u2502"
+
+	// Tree view icons
+	IconTreeExpanded   = "\uf0d7" // nf-fa-caret_down
+	IconTreeCollapsed  = "\uf0da" // nf-fa-caret_right
+	IconTreeLeaf       = "\uf111" // nf-fa-circle (small dot)
+	IconTreeBranch     = "\u251c" // ├
+	IconTreeLastBranch = "\u2514" // └
+	IconTreeVertical   = "\u2502" // │
+	IconTreeSpace      = " "
+
+	// Timeline/Gantt icons
+	IconBarFull    = "\u2588" // █
+	IconBarHalf    = "\u2584" // ▄
+	IconBarEmpty   = "\u2591" // ░
+	IconBarRunning = "\u2593" // ▓
 )
 
 // Logo for the header
-const Logo = `temporal-tui`
+const Logo = `loom`
 
 // LogoSmall is a compact version
-const LogoSmall = "temporal-tui"
+const LogoSmall = "loom"
 
 // StatusIcon returns the icon for a workflow status.
 func StatusIcon(status string) string {
@@ -561,4 +593,12 @@ func StatusColorTag(status string) string {
 	default:
 		return activeTheme.Tags.Fg
 	}
+}
+
+// OnThemeChange is deprecated - components should read colors dynamically at draw time.
+// This function is kept for backward compatibility but does nothing.
+// Theme changes are handled atomically by SetTheme via app.Sync().
+func OnThemeChange(fn func(*config.ParsedTheme)) func() {
+	// No-op - theme changes are now handled atomically
+	return func() {}
 }

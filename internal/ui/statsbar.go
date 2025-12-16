@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 
-	"github.com/atterpac/temportui/internal/config"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -11,6 +10,7 @@ import (
 // StatsBar displays application status and workflow statistics in a bordered panel.
 type StatsBar struct {
 	*tview.Box
+	profile    string
 	namespace  string
 	connected  bool
 	running    int
@@ -26,14 +26,13 @@ func NewStatsBar() *StatsBar {
 		namespace: "default",
 		connected: true,
 	}
-	s.SetBackgroundColor(ColorBg())
-
-	// Register for theme changes
-	OnThemeChange(func(_ *config.ParsedTheme) {
-		s.SetBackgroundColor(ColorBg())
-	})
-
+	s.SetBackgroundColor(tcell.ColorDefault)
 	return s
+}
+
+// SetProfile updates the displayed profile name.
+func (s *StatsBar) SetProfile(profile string) {
+	s.profile = profile
 }
 
 // SetNamespace updates the displayed namespace.
@@ -59,7 +58,16 @@ func (s *StatsBar) SetTaskQueueCount(count int) {
 }
 
 // Draw renders the stats bar with rounded borders.
+// Colors are read dynamically from the current theme.
 func (s *StatsBar) Draw(screen tcell.Screen) {
+	// Read colors dynamically at draw time
+	bgColor := ColorBg()
+	borderColor := ColorPanelBorder()
+	titleColor := ColorPanelTitle()
+	fgColor := ColorFg()
+	fgDimColor := ColorFgDim()
+
+	s.Box.SetBackgroundColor(bgColor)
 	s.Box.DrawForSubclass(screen, s)
 
 	x, y, width, height := s.GetInnerRect()
@@ -67,10 +75,10 @@ func (s *StatsBar) Draw(screen tcell.Screen) {
 		return
 	}
 
-	borderStyle := tcell.StyleDefault.Foreground(ColorPanelBorder()).Background(ColorBg())
-	titleStyle := tcell.StyleDefault.Foreground(ColorPanelTitle()).Background(ColorBg()).Bold(true)
-	textStyle := tcell.StyleDefault.Foreground(ColorFg()).Background(ColorBg())
-	dimStyle := tcell.StyleDefault.Foreground(ColorFgDim()).Background(ColorBg())
+	borderStyle := tcell.StyleDefault.Foreground(borderColor).Background(bgColor)
+	titleStyle := tcell.StyleDefault.Foreground(titleColor).Background(bgColor).Bold(true)
+	textStyle := tcell.StyleDefault.Foreground(fgColor).Background(bgColor)
+	dimStyle := tcell.StyleDefault.Foreground(fgDimColor).Background(bgColor)
 
 	// Draw rounded border
 	screen.SetContent(x, y, '╭', nil, borderStyle)
@@ -106,11 +114,35 @@ func (s *StatsBar) Draw(screen tcell.Screen) {
 	// Connection status
 	connIcon := IconConnected
 	connText := "connected"
-	connStyle := tcell.StyleDefault.Foreground(ColorCompleted()).Background(ColorBg())
+	connStyle := tcell.StyleDefault.Foreground(ColorCompleted()).Background(bgColor)
 	if !s.connected {
 		connIcon = IconDisconnected
 		connText = "disconnected"
-		connStyle = tcell.StyleDefault.Foreground(ColorFailed()).Background(ColorBg())
+		connStyle = tcell.StyleDefault.Foreground(ColorFailed()).Background(bgColor)
+	}
+
+	accentStyle := tcell.StyleDefault.Foreground(ColorAccent()).Background(bgColor)
+
+	// Draw profile name (if set)
+	if s.profile != "" {
+		profileText := s.profile
+		for i, r := range []rune(profileText) {
+			if contentX+i >= x+width-2 {
+				break
+			}
+			screen.SetContent(contentX+i, contentY, r, nil, accentStyle)
+		}
+		contentX += len(profileText)
+
+		// Separator after profile
+		sep := " • "
+		for i, r := range []rune(sep) {
+			if contentX+i >= x+width-2 {
+				break
+			}
+			screen.SetContent(contentX+i, contentY, r, nil, dimStyle)
+		}
+		contentX += len(sep)
 	}
 
 	// Draw namespace
@@ -124,14 +156,14 @@ func (s *StatsBar) Draw(screen tcell.Screen) {
 	contentX += len(nsText)
 
 	// Separator
-	sep := " • "
-	for i, r := range []rune(sep) {
+	nsSep := " • "
+	for i, r := range []rune(nsSep) {
 		if contentX+i >= x+width-2 {
 			break
 		}
 		screen.SetContent(contentX+i, contentY, r, nil, dimStyle)
 	}
-	contentX += len(sep)
+	contentX += len(nsSep)
 
 	// Connection status with icon
 	connFull := connIcon + " " + connText
@@ -148,7 +180,7 @@ func (s *StatsBar) Draw(screen tcell.Screen) {
 	statsText := s.buildStatsText()
 	statsX := x + width - len(statsText) - 3
 	if statsX > contentX+3 {
-		s.drawStats(screen, statsX, contentY)
+		s.drawStats(screen, statsX, contentY, bgColor)
 	}
 }
 
@@ -157,12 +189,12 @@ func (s *StatsBar) buildStatsText() string {
 		s.running, s.completed, s.failed, s.taskQueues)
 }
 
-func (s *StatsBar) drawStats(screen tcell.Screen, x, y int) {
-	labelStyle := tcell.StyleDefault.Foreground(ColorFgDim()).Background(ColorBg())
-	runningStyle := tcell.StyleDefault.Foreground(ColorRunning()).Background(ColorBg())
-	completedStyle := tcell.StyleDefault.Foreground(ColorCompleted()).Background(ColorBg())
-	failedStyle := tcell.StyleDefault.Foreground(ColorFailed()).Background(ColorBg())
-	accentStyle := tcell.StyleDefault.Foreground(ColorAccentDim()).Background(ColorBg())
+func (s *StatsBar) drawStats(screen tcell.Screen, x, y int, bgColor tcell.Color) {
+	labelStyle := tcell.StyleDefault.Foreground(ColorFgDim()).Background(bgColor)
+	runningStyle := tcell.StyleDefault.Foreground(ColorRunning()).Background(bgColor)
+	completedStyle := tcell.StyleDefault.Foreground(ColorCompleted()).Background(bgColor)
+	failedStyle := tcell.StyleDefault.Foreground(ColorFailed()).Background(bgColor)
+	accentStyle := tcell.StyleDefault.Foreground(ColorAccentDim()).Background(bgColor)
 
 	// Running
 	x = s.drawText(screen, x, y, "Running: ", labelStyle)

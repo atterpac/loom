@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/atterpac/temportui/internal/config"
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -21,22 +21,17 @@ func NewCrumbs() *Crumbs {
 		path:     []string{},
 	}
 	c.SetDynamicColors(true)
-	c.applyTheme()
+	c.SetBackgroundColor(tcell.ColorDefault)
 	c.render()
-
-	// Register for theme changes
-	OnThemeChange(func(_ *config.ParsedTheme) {
-		c.applyTheme()
-		c.render()
-	})
 
 	return c
 }
 
-// applyTheme applies the current theme colors to the crumbs.
-func (c *Crumbs) applyTheme() {
+// Draw applies theme colors dynamically before drawing.
+func (c *Crumbs) Draw(screen tcell.Screen) {
 	c.SetBackgroundColor(ColorBg())
 	c.SetTextColor(ColorCrumb())
+	c.TextView.Draw(screen)
 }
 
 // SetPath sets the breadcrumb path.

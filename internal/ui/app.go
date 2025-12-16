@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -27,6 +28,8 @@ func NewApp() *App {
 		commandBar:  NewCommandBar(),
 		pages:       NewPages(),
 	}
+	// Register app instance for safe UI updates from any component
+	SetAppInstance(app.Application)
 	app.buildLayout()
 	return app
 }
@@ -36,9 +39,10 @@ func (a *App) buildLayout() {
 	// which should be called before NewApp()
 
 	// Create top bar that can hold either statsBar or command bar
+	// Use ColorDefault to pick up colors dynamically
 	a.topBar = tview.NewFlex().SetDirection(tview.FlexRow)
 	a.topBar.AddItem(a.statsBar, 3, 0, false)
-	a.topBar.SetBackgroundColor(ColorBg())
+	a.topBar.SetBackgroundColor(tcell.ColorDefault)
 
 	a.main = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(a.topBar, 3, 0, false).
@@ -46,7 +50,7 @@ func (a *App) buildLayout() {
 		AddItem(a.pages, 0, 1, true).
 		AddItem(a.menu, 1, 0, false)
 
-	a.main.SetBackgroundColor(ColorBg())
+	a.main.SetBackgroundColor(tcell.ColorDefault)
 	a.SetRoot(a.main, true)
 }
 
@@ -95,4 +99,3 @@ func (a *App) HideCommandBar() {
 	a.topBar.Clear()
 	a.topBar.AddItem(a.statsBar, 3, 0, false)
 }
-

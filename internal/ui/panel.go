@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"github.com/atterpac/temportui/internal/config"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -9,31 +8,23 @@ import (
 // Panel is a container with rounded borders and an optional title.
 type Panel struct {
 	*tview.Box
-	content     tview.Primitive
-	title       string
-	borderColor tcell.Color
-	titleColor  tcell.Color
+	content tview.Primitive
+	title   string
 }
 
 // NewPanel creates a new panel with rounded borders.
 func NewPanel(title string) *Panel {
 	p := &Panel{
-		Box:         tview.NewBox(),
-		title:       title,
-		borderColor: ColorPanelBorder(),
-		titleColor:  ColorPanelTitle(),
+		Box:   tview.NewBox(),
+		title: title,
 	}
-	p.SetBackgroundColor(ColorBg())
-
-	// Register for theme changes
-	OnThemeChange(func(_ *config.ParsedTheme) {
-		p.borderColor = ColorPanelBorder()
-		p.titleColor = ColorPanelTitle()
-		p.SetBackgroundColor(ColorBg())
-	})
-
+	// Use tcell.ColorDefault to let Draw() pick up current theme colors
+	p.SetBackgroundColor(tcell.ColorDefault)
 	return p
 }
+
+// Destroy is a no-op kept for backward compatibility.
+func (p *Panel) Destroy() {}
 
 // SetContent sets the content primitive inside the panel.
 func (p *Panel) SetContent(content tview.Primitive) *Panel {
@@ -47,20 +38,24 @@ func (p *Panel) SetTitle(title string) *Panel {
 	return p
 }
 
-// SetBorderColor sets the border color.
+// SetBorderColor is a no-op - colors are read dynamically.
 func (p *Panel) SetBorderColor(color tcell.Color) *Panel {
-	p.borderColor = color
 	return p
 }
 
-// SetTitleColor sets the title color.
+// SetTitleColor is a no-op - colors are read dynamically.
 func (p *Panel) SetTitleColor(color tcell.Color) *Panel {
-	p.titleColor = color
 	return p
 }
 
 // Draw renders the panel with rounded borders.
 func (p *Panel) Draw(screen tcell.Screen) {
+	// Read colors dynamically at draw time
+	bgColor := ColorBg()
+	borderColor := ColorPanelBorder()
+	titleColor := ColorPanelTitle()
+
+	p.Box.SetBackgroundColor(bgColor)
 	p.Box.DrawForSubclass(screen, p)
 
 	x, y, width, height := p.GetInnerRect()
@@ -68,8 +63,8 @@ func (p *Panel) Draw(screen tcell.Screen) {
 		return
 	}
 
-	borderStyle := tcell.StyleDefault.Foreground(p.borderColor).Background(ColorBg())
-	titleStyle := tcell.StyleDefault.Foreground(p.titleColor).Background(ColorBg()).Bold(true)
+	borderStyle := tcell.StyleDefault.Foreground(borderColor).Background(bgColor)
+	titleStyle := tcell.StyleDefault.Foreground(titleColor).Background(bgColor).Bold(true)
 
 	// Draw corners
 	screen.SetContent(x, y, '╭', nil, borderStyle)
