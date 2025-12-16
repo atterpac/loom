@@ -8,7 +8,7 @@ A terminal UI client for [Temporal](https://temporal.io).
 ## Installation
 
 ```bash
-go install github.com/atterpac/loom@latest
+go install github.com/atterpac/loom/cmd/loom@latest
 ```
 
 ## Usage
