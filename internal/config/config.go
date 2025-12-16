@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -25,19 +26,52 @@ type ConnectionConfig struct {
 	TLS       TLSConfig `yaml:"tls,omitempty"`
 }
 
+// ToTemporalConfig converts config.ConnectionConfig to temporal-compatible format.
+// Returns address, namespace, and TLS fields as separate values.
+func (c ConnectionConfig) ToTemporalConfig() (address, namespace, tlsCert, tlsKey, tlsCA, tlsServerName string, tlsSkipVerify bool) {
+	return c.Address, c.Namespace, c.TLS.Cert, c.TLS.Key, c.TLS.CA, c.TLS.ServerName, c.TLS.SkipVerify
+}
+
+// FromTemporalConfig creates a ConnectionConfig from temporal-style flat fields.
+func FromTemporalConfig(address, namespace, tlsCert, tlsKey, tlsCA, tlsServerName string, tlsSkipVerify bool) ConnectionConfig {
+	return ConnectionConfig{
+		Address:   address,
+		Namespace: namespace,
+		TLS: TLSConfig{
+			Cert:       tlsCert,
+			Key:        tlsKey,
+			CA:         tlsCA,
+			ServerName: tlsServerName,
+			SkipVerify: tlsSkipVerify,
+		},
+	}
+}
+
+// SavedFilter represents a saved visibility query.
+type SavedFilter struct {
+	Name      string `yaml:"name"`
+	Query     string `yaml:"query"`
+	IsDefault bool   `yaml:"is_default,omitempty"`
+}
+
 // Config represents the application configuration.
 type Config struct {
-	Theme      string           `yaml:"theme"`
-	Connection ConnectionConfig `yaml:"connection"`
+	Theme         string                      `yaml:"theme"`
+	ActiveProfile string                      `yaml:"active_profile,omitempty"`
+	Profiles      map[string]ConnectionConfig `yaml:"profiles,omitempty"`
+	SavedFilters  []SavedFilter               `yaml:"saved_filters,omitempty"`
 }
 
 // DefaultConfig returns a config with default values.
 func DefaultConfig() *Config {
 	return &Config{
-		Theme: DefaultTheme,
-		Connection: ConnectionConfig{
-			Address:   "localhost:7233",
-			Namespace: "default",
+		Theme:         DefaultTheme,
+		ActiveProfile: "default",
+		Profiles: map[string]ConnectionConfig{
+			"default": {
+				Address:   "localhost:7233",
+				Namespace: "default",
+			},
 		},
 	}
 }
@@ -60,7 +94,37 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
+	// Ensure profiles and active profile are set
+	cfg.ensureDefaults()
+
 	return cfg, nil
+}
+
+// ensureDefaults ensures the config has valid profiles and active profile.
+func (c *Config) ensureDefaults() {
+	if c.Profiles == nil || len(c.Profiles) == 0 {
+		c.Profiles = map[string]ConnectionConfig{
+			"default": {
+				Address:   "localhost:7233",
+				Namespace: "default",
+			},
+		}
+		c.ActiveProfile = "default"
+	}
+
+	// Ensure ActiveProfile is set and valid
+	if c.ActiveProfile == "" {
+		for name := range c.Profiles {
+			c.ActiveProfile = name
+			break
+		}
+	} else if _, ok := c.Profiles[c.ActiveProfile]; !ok {
+		// Active profile doesn't exist, use first available
+		for name := range c.Profiles {
+			c.ActiveProfile = name
+			break
+		}
+	}
 }
 
 // Save writes the config to disk.
@@ -125,6 +189,172 @@ func LoadTheme(name string) (*ParsedTheme, error) {
 // Save writes the config to disk (standalone function).
 func Save(c *Config) error {
 	return c.Save()
+}
+
+// GetProfile returns a profile by name.
+func (c *Config) GetProfile(name string) (ConnectionConfig, bool) {
+	if c.Profiles == nil {
+		return ConnectionConfig{}, false
+	}
+	profile, ok := c.Profiles[name]
+	return profile, ok
+}
+
+// GetActiveProfile returns the active profile name and its configuration.
+func (c *Config) GetActiveProfile() (string, ConnectionConfig) {
+	if c.Profiles == nil || c.ActiveProfile == "" {
+		return "default", ConnectionConfig{
+			Address:   "localhost:7233",
+			Namespace: "default",
+		}
+	}
+	profile, ok := c.Profiles[c.ActiveProfile]
+	if !ok {
+		// Active profile doesn't exist, return first available
+		for name, cfg := range c.Profiles {
+			return name, cfg
+		}
+		return "default", ConnectionConfig{
+			Address:   "localhost:7233",
+			Namespace: "default",
+		}
+	}
+	return c.ActiveProfile, profile
+}
+
+// SetActiveProfile sets the active profile by name.
+// Returns error if profile doesn't exist.
+func (c *Config) SetActiveProfile(name string) error {
+	if c.Profiles == nil {
+		return fmt.Errorf("no profiles configured")
+	}
+	if _, ok := c.Profiles[name]; !ok {
+		return fmt.Errorf("profile %q not found", name)
+	}
+	c.ActiveProfile = name
+	return nil
+}
+
+// SaveProfile saves or updates a profile.
+func (c *Config) SaveProfile(name string, cfg ConnectionConfig) {
+	if c.Profiles == nil {
+		c.Profiles = make(map[string]ConnectionConfig)
+	}
+	c.Profiles[name] = cfg
+}
+
+// DeleteProfile deletes a profile by name.
+// Returns error if trying to delete the active profile or if profile doesn't exist.
+func (c *Config) DeleteProfile(name string) error {
+	if c.Profiles == nil {
+		return fmt.Errorf("profile %q not found", name)
+	}
+	if _, ok := c.Profiles[name]; !ok {
+		return fmt.Errorf("profile %q not found", name)
+	}
+	if c.ActiveProfile == name {
+		return fmt.Errorf("cannot delete active profile %q", name)
+	}
+	delete(c.Profiles, name)
+	return nil
+}
+
+// ListProfiles returns a sorted list of profile names.
+func (c *Config) ListProfiles() []string {
+	if c.Profiles == nil {
+		return nil
+	}
+	names := make([]string, 0, len(c.Profiles))
+	for name := range c.Profiles {
+		names = append(names, name)
+	}
+	// Sort for consistent ordering
+	sort.Strings(names)
+	return names
+}
+
+// ProfileExists checks if a profile with the given name exists.
+func (c *Config) ProfileExists(name string) bool {
+	if c.Profiles == nil {
+		return false
+	}
+	_, ok := c.Profiles[name]
+	return ok
+}
+
+// Saved filter management methods
+
+// GetSavedFilters returns all saved filters.
+func (c *Config) GetSavedFilters() []SavedFilter {
+	return c.SavedFilters
+}
+
+// GetSavedFilter returns a saved filter by name.
+func (c *Config) GetSavedFilter(name string) (SavedFilter, bool) {
+	for _, f := range c.SavedFilters {
+		if f.Name == name {
+			return f, true
+		}
+	}
+	return SavedFilter{}, false
+}
+
+// SaveFilter adds or updates a saved filter.
+func (c *Config) SaveFilter(filter SavedFilter) {
+	// Check if filter with same name exists
+	for i, f := range c.SavedFilters {
+		if f.Name == filter.Name {
+			c.SavedFilters[i] = filter
+			return
+		}
+	}
+	// Add new filter
+	c.SavedFilters = append(c.SavedFilters, filter)
+}
+
+// DeleteFilter removes a saved filter by name.
+func (c *Config) DeleteFilter(name string) error {
+	for i, f := range c.SavedFilters {
+		if f.Name == name {
+			c.SavedFilters = append(c.SavedFilters[:i], c.SavedFilters[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("filter %q not found", name)
+}
+
+// GetDefaultFilter returns the default filter if one is set.
+func (c *Config) GetDefaultFilter() (SavedFilter, bool) {
+	for _, f := range c.SavedFilters {
+		if f.IsDefault {
+			return f, true
+		}
+	}
+	return SavedFilter{}, false
+}
+
+// SetDefaultFilter sets a filter as the default, clearing any previous default.
+func (c *Config) SetDefaultFilter(name string) error {
+	found := false
+	for i := range c.SavedFilters {
+		if c.SavedFilters[i].Name == name {
+			c.SavedFilters[i].IsDefault = true
+			found = true
+		} else {
+			c.SavedFilters[i].IsDefault = false
+		}
+	}
+	if !found {
+		return fmt.Errorf("filter %q not found", name)
+	}
+	return nil
+}
+
+// ClearDefaultFilter clears the default filter.
+func (c *Config) ClearDefaultFilter() {
+	for i := range c.SavedFilters {
+		c.SavedFilters[i].IsDefault = false
+	}
 }
 
 // loadThemeFile loads a theme from a YAML file.

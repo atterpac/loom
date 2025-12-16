@@ -6,24 +6,24 @@ import (
 )
 
 // ConfigDir returns the configuration directory path following XDG spec.
-// Priority: $XDG_CONFIG_HOME/temporal-tui > ~/.config/temporal-tui > ~/.temporal-tui
+// Priority: $XDG_CONFIG_HOME/loom > ~/.config/loom > ~/.loom
 func ConfigDir() string {
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "temporal-tui")
+		return filepath.Join(xdg, "loom")
 	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ".temporal-tui"
+		return ".loom"
 	}
 
-	// Prefer ~/.config/temporal-tui if .config exists
+	// Prefer ~/.config/loom if .config exists
 	configDir := filepath.Join(home, ".config")
 	if info, err := os.Stat(configDir); err == nil && info.IsDir() {
-		return filepath.Join(configDir, "temporal-tui")
+		return filepath.Join(configDir, "loom")
 	}
 
-	return filepath.Join(home, ".temporal-tui")
+	return filepath.Join(home, ".loom")
 }
 
 // ConfigPath returns the full path to the config file.
