@@ -2,7 +2,9 @@ package view
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/atterpac/loom/internal/config"
@@ -352,6 +354,9 @@ func (eh *EventHistory) updateSidePanelFromList(index int) {
 	icon := eventIcon(ev.Type)
 	colorTag := eventColorTag(ev.Type)
 
+	// Pretty print details if it contains JSON
+	formattedDetails := formatSidePanelDetails(ev.Details)
+
 	text := fmt.Sprintf(`
 [%s::b]Event ID[-:-:-]
 [%s]%d[-]
@@ -363,7 +368,7 @@ func (eh *EventHistory) updateSidePanelFromList(index int) {
 [%s]%s[-]
 
 [%s::b]Details[-:-:-]
-[%s]%s[-]`,
+%s`,
 		ui.TagPanelTitle(),
 		ui.TagFg(), ev.ID,
 		ui.TagPanelTitle(),
@@ -371,7 +376,7 @@ func (eh *EventHistory) updateSidePanelFromList(index int) {
 		ui.TagPanelTitle(),
 		ui.TagFg(), ev.Time.Format("2006-01-02 15:04:05.000"),
 		ui.TagPanelTitle(),
-		ui.TagFgDim(), ev.Details,
+		formattedDetails,
 	)
 	eh.sidePanel.SetText(text)
 }
@@ -396,6 +401,19 @@ func (eh *EventHistory) updateSidePanelFromTree(node *temporal.EventTreeNode) {
 		attemptsStr = fmt.Sprintf("\n\n[%s::b]Attempts[-:-:-]\n[%s]%d[-]", ui.TagPanelTitle(), ui.TagFg(), node.Attempts)
 	}
 
+	// Extract result/failure from events
+	var dataStr string
+	for _, ev := range node.Events {
+		if ev.Result != "" {
+			formatted := formatSidePanelDetails(ev.Result)
+			dataStr += fmt.Sprintf("\n\n[%s::b]Result[-:-:-]\n%s", ui.TagPanelTitle(), formatted)
+		}
+		if ev.Failure != "" {
+			formatted := formatSidePanelDetails(ev.Failure)
+			dataStr += fmt.Sprintf("\n\n[%s::b]Failure[-:-:-]\n[%s]%s[-]", ui.TagPanelTitle(), ui.TagFailed(), formatted)
+		}
+	}
+
 	var eventsStr string
 	if len(node.Events) > 0 {
 		eventsStr = fmt.Sprintf("\n\n[%s::b]Events[-:-:-]", ui.TagPanelTitle())
@@ -417,7 +435,7 @@ func (eh *EventHistory) updateSidePanelFromTree(node *temporal.EventTreeNode) {
 [%s]%s[-]
 
 [%s::b]Start Time[-:-:-]
-[%s]%s[-]%s%s`,
+[%s]%s[-]%s%s%s`,
 		ui.TagPanelTitle(),
 		ui.TagFg(), node.Name,
 		ui.TagPanelTitle(),
@@ -427,6 +445,7 @@ func (eh *EventHistory) updateSidePanelFromTree(node *temporal.EventTreeNode) {
 		ui.TagPanelTitle(),
 		ui.TagFg(), node.StartTime.Format("2006-01-02 15:04:05.000"),
 		attemptsStr,
+		dataStr,
 		eventsStr,
 	)
 	eh.sidePanel.SetText(text)
@@ -471,6 +490,12 @@ func (eh *EventHistory) setupInputCapture() {
 			return nil
 		case 'r':
 			eh.loadData()
+			return nil
+		case 'y':
+			eh.yankEventData()
+			return nil
+		case 'd':
+			eh.showDetailModal()
 			return nil
 		}
 
@@ -527,6 +552,8 @@ func (eh *EventHistory) Hints() []ui.KeyHint {
 	hints := []ui.KeyHint{
 		{Key: "v", Description: "Cycle View"},
 		{Key: "1/2/3", Description: "List/Tree/Timeline"},
+		{Key: "d", Description: "Detail"},
+		{Key: "y", Description: "Yank"},
 		{Key: "p", Description: "Preview"},
 		{Key: "r", Description: "Refresh"},
 	}
@@ -640,4 +667,447 @@ func containsHelper(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// getSelectedEventData returns the raw data for the currently selected event.
+func (eh *EventHistory) getSelectedEventData() (string, string) {
+	switch eh.viewMode {
+	case ViewModeList:
+		row := eh.table.SelectedRow()
+		if row >= 0 && row < len(eh.enhancedEvents) {
+			ev := eh.enhancedEvents[row]
+			return ev.Type, eh.formatEventDataRaw(&ev)
+		}
+	case ViewModeTree:
+		node := eh.treeView.SelectedNode()
+		if node != nil && len(node.Events) > 0 {
+			// Get the most relevant event (usually the last one with data)
+			for i := len(node.Events) - 1; i >= 0; i-- {
+				ev := node.Events[i]
+				if ev.Result != "" || ev.Failure != "" || ev.Details != "" {
+					return ev.Type, eh.formatEventDataRaw(ev)
+				}
+			}
+			// Fallback to first event
+			return node.Events[0].Type, eh.formatEventDataRaw(node.Events[0])
+		}
+	case ViewModeTimeline:
+		lane := eh.timelineView.SelectedLane()
+		if lane != nil && lane.Node != nil && len(lane.Node.Events) > 0 {
+			ev := lane.Node.Events[len(lane.Node.Events)-1]
+			return ev.Type, eh.formatEventDataRaw(ev)
+		}
+	}
+	return "", ""
+}
+
+// formatEventDataRaw formats event data as raw JSON/text for copying.
+func (eh *EventHistory) formatEventDataRaw(ev *temporal.EnhancedHistoryEvent) string {
+	var parts []string
+
+	if ev.Details != "" {
+		parts = append(parts, fmt.Sprintf("Details: %s", prettyPrintJSON(ev.Details)))
+	}
+	if ev.Result != "" {
+		parts = append(parts, fmt.Sprintf("Result: %s", prettyPrintJSON(ev.Result)))
+	}
+	if ev.Failure != "" {
+		parts = append(parts, fmt.Sprintf("Failure: %s", prettyPrintJSON(ev.Failure)))
+	}
+
+	if len(parts) == 0 {
+		return ev.Details
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// yankEventData copies the selected event's data to clipboard.
+func (eh *EventHistory) yankEventData() {
+	eventType, data := eh.getSelectedEventData()
+	if data == "" {
+		return
+	}
+
+	if err := ui.CopyToClipboard(data); err != nil {
+		eh.sidePanel.SetText(fmt.Sprintf("[%s]%s Failed to copy: %s[-]",
+			ui.TagFailed(), ui.IconFailed, err.Error()))
+		return
+	}
+
+	// Show success feedback
+	eh.sidePanel.SetText(fmt.Sprintf(`[%s::b]Copied to clipboard[-:-:-]
+
+[%s]%s[-]
+
+[%s]%s[-]`,
+		ui.TagPanelTitle(),
+		ui.TagAccent(), eventType,
+		ui.TagCompleted(), "Event data copied!"))
+
+	// Restore preview after a brief delay
+	go func() {
+		time.Sleep(1500 * time.Millisecond)
+		eh.app.UI().QueueUpdateDraw(func() {
+			eh.refreshSidePanel()
+		})
+	}()
+}
+
+// refreshSidePanel updates the side panel based on current selection.
+func (eh *EventHistory) refreshSidePanel() {
+	switch eh.viewMode {
+	case ViewModeList:
+		row := eh.table.SelectedRow()
+		if row >= 0 && row < len(eh.events) {
+			eh.updateSidePanelFromList(row)
+		}
+	case ViewModeTree:
+		node := eh.treeView.SelectedNode()
+		if node != nil {
+			eh.updateSidePanelFromTree(node)
+		}
+	case ViewModeTimeline:
+		lane := eh.timelineView.SelectedLane()
+		if lane != nil && lane.Node != nil {
+			eh.updateSidePanelFromTree(lane.Node)
+		}
+	}
+}
+
+// showDetailModal shows a full-screen modal with pretty-printed event data.
+func (eh *EventHistory) showDetailModal() {
+	eventType, data := eh.getSelectedEventData()
+	if data == "" {
+		return
+	}
+
+	// Create scrollable text view for the detail
+	textView := tview.NewTextView()
+	textView.SetDynamicColors(true)
+	textView.SetScrollable(true)
+	textView.SetWordWrap(true)
+	textView.SetBackgroundColor(ui.ColorBg())
+	textView.SetTextColor(ui.ColorFg())
+
+	// Format with syntax highlighting for JSON
+	formattedData := formatDetailWithHighlighting(data)
+	textView.SetText(formattedData)
+
+	// Create modal using the base Modal component for consistent styling
+	modal := ui.NewModal(ui.ModalConfig{
+		Title:     "Detail",
+		Width:     80,
+		Height:    20,
+		MinHeight: 10,
+		MaxHeight: 30,
+		Backdrop:  true,
+	})
+	modal.SetContent(textView)
+	modal.SetHints([]ui.KeyHint{
+		{Key: "j/k", Description: "Scroll"},
+		{Key: "g/G", Description: "Top/Bottom"},
+		{Key: "y", Description: "Yank"},
+		{Key: "q", Description: "Close"},
+	})
+
+	// Update panel title with event type
+	modal.GetPanel().SetTitle(fmt.Sprintf("Detail: %s", truncateEventType(eventType)))
+
+	modal.SetOnClose(func() {
+		eh.closeDetailModal()
+	})
+
+	// Input handler for the modal
+	textView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEscape:
+			eh.closeDetailModal()
+			return nil
+		case tcell.KeyRune:
+			switch event.Rune() {
+			case 'q':
+				eh.closeDetailModal()
+				return nil
+			case 'y':
+				if err := ui.CopyToClipboard(data); err == nil {
+					// Show brief feedback
+					title := fmt.Sprintf("Detail: %s", truncateEventType(eventType))
+					modal.GetPanel().SetTitle("Copied!")
+					modal.GetPanel().SetTitleColor(ui.ColorCompleted())
+					go func() {
+						time.Sleep(1 * time.Second)
+						eh.app.UI().QueueUpdateDraw(func() {
+							modal.GetPanel().SetTitle(title)
+							modal.GetPanel().SetTitleColor(tcell.ColorDefault)
+						})
+					}()
+				}
+				return nil
+			case 'j':
+				row, _ := textView.GetScrollOffset()
+				textView.ScrollTo(row+1, 0)
+				return nil
+			case 'k':
+				row, _ := textView.GetScrollOffset()
+				if row > 0 {
+					textView.ScrollTo(row-1, 0)
+				}
+				return nil
+			case 'G':
+				textView.ScrollToEnd()
+				return nil
+			case 'g':
+				textView.ScrollTo(0, 0)
+				return nil
+			}
+		}
+		return event
+	})
+
+	eh.app.UI().Pages().AddPage("event-detail", modal, true, true)
+	eh.app.UI().SetFocus(textView)
+}
+
+// truncateEventType shortens long event type names for the title.
+func truncateEventType(eventType string) string {
+	if len(eventType) > 30 {
+		return eventType[:27] + "..."
+	}
+	return eventType
+}
+
+// formatSidePanelDetails formats event details with pretty-printed JSON and syntax highlighting.
+func formatSidePanelDetails(details string) string {
+	if details == "" {
+		return fmt.Sprintf("[%s]No details[-]", ui.TagFgDim())
+	}
+
+	// First try to pretty print if it's pure JSON
+	trimmed := strings.TrimSpace(details)
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		formatted := prettyPrintJSON(details)
+		return highlightFormattedJSON(formatted)
+	}
+
+	// Handle key-value format like "WorkflowType: Foo, TaskQueue: bar, Input: {...}"
+	return formatKeyValueDetails(details)
+}
+
+// formatKeyValueDetails formats key-value style details with embedded JSON.
+func formatKeyValueDetails(details string) string {
+	var result strings.Builder
+
+	// Split by common delimiters but preserve JSON objects
+	parts := splitPreservingJSON(details)
+
+	for i, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		if i > 0 {
+			result.WriteString("\n")
+		}
+
+		// Check if this part has a key: value structure
+		if colonIdx := strings.Index(part, ":"); colonIdx > 0 {
+			key := strings.TrimSpace(part[:colonIdx])
+			value := strings.TrimSpace(part[colonIdx+1:])
+
+			// Write the key in accent color
+			result.WriteString(fmt.Sprintf("[%s]%s:[-] ", ui.TagAccent(), key))
+
+			// Check if value is JSON
+			if strings.HasPrefix(value, "{") || strings.HasPrefix(value, "[") {
+				formatted := prettyPrintJSON(value)
+				if formatted != value {
+					// JSON was successfully formatted - indent it
+					lines := strings.Split(formatted, "\n")
+					for j, line := range lines {
+						if j == 0 {
+							result.WriteString(highlightJSONValueLine(line))
+						} else {
+							result.WriteString("\n  ")
+							result.WriteString(highlightJSONValueLine(line))
+						}
+					}
+				} else {
+					result.WriteString(highlightJSONValueLine(value))
+				}
+			} else {
+				result.WriteString(highlightJSONValueLine(value))
+			}
+		} else {
+			// No key-value structure, just highlight as value
+			result.WriteString(highlightJSONValueLine(part))
+		}
+	}
+
+	return result.String()
+}
+
+// splitPreservingJSON splits a string by commas while preserving JSON objects.
+func splitPreservingJSON(s string) []string {
+	var parts []string
+	var current strings.Builder
+	depth := 0
+
+	for _, ch := range s {
+		switch ch {
+		case '{', '[':
+			depth++
+			current.WriteRune(ch)
+		case '}', ']':
+			depth--
+			current.WriteRune(ch)
+		case ',':
+			if depth == 0 {
+				parts = append(parts, current.String())
+				current.Reset()
+			} else {
+				current.WriteRune(ch)
+			}
+		default:
+			current.WriteRune(ch)
+		}
+	}
+
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+
+	return parts
+}
+
+// highlightFormattedJSON applies syntax highlighting to already-formatted JSON.
+func highlightFormattedJSON(formatted string) string {
+	lines := strings.Split(formatted, "\n")
+	var result []string
+	for _, line := range lines {
+		result = append(result, highlightJSONValueLine(line))
+	}
+	return strings.Join(result, "\n")
+}
+
+// highlightJSONValueLine highlights a single line of JSON content.
+func highlightJSONValueLine(line string) string {
+	// Check for key: value pattern
+	if colonIdx := strings.Index(line, ":"); colonIdx > 0 {
+		prefix := line[:colonIdx]
+		suffix := line[colonIdx+1:]
+
+		trimmed := strings.TrimSpace(prefix)
+		if strings.HasPrefix(trimmed, "\"") && strings.HasSuffix(trimmed, "\"") {
+			// JSON key with quotes - use accent color
+			return fmt.Sprintf("[%s]%s[-]:[%s]%s[-]", ui.TagAccent(), prefix, ui.TagFg(), highlightValues(suffix))
+		}
+	}
+
+	return highlightValues(line)
+}
+
+// highlightValues highlights JSON values (booleans, null, numbers).
+func highlightValues(s string) string {
+	result := s
+	result = strings.ReplaceAll(result, "true", fmt.Sprintf("[%s]true[-]", ui.TagCompleted()))
+	result = strings.ReplaceAll(result, "false", fmt.Sprintf("[%s]false[-]", ui.TagFailed()))
+	result = strings.ReplaceAll(result, "null", fmt.Sprintf("[%s]null[-]", ui.TagFgDim()))
+	return result
+}
+
+// closeDetailModal closes the detail modal.
+func (eh *EventHistory) closeDetailModal() {
+	eh.app.UI().Pages().RemovePage("event-detail")
+	// Restore focus to current view
+	switch eh.viewMode {
+	case ViewModeList:
+		eh.app.UI().SetFocus(eh.table)
+	case ViewModeTree:
+		eh.app.UI().SetFocus(eh.treeView)
+	case ViewModeTimeline:
+		eh.app.UI().SetFocus(eh.timelineView)
+	}
+}
+
+// prettyPrintJSON attempts to format a string as pretty JSON.
+// If it's not valid JSON, returns the original string.
+func prettyPrintJSON(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return s
+	}
+
+	// Check if it looks like JSON
+	if !strings.HasPrefix(s, "{") && !strings.HasPrefix(s, "[") {
+		return s
+	}
+
+	var parsed interface{}
+	if err := json.Unmarshal([]byte(s), &parsed); err != nil {
+		return s
+	}
+
+	pretty, err := json.MarshalIndent(parsed, "", "  ")
+	if err != nil {
+		return s
+	}
+
+	return string(pretty)
+}
+
+// formatDetailWithHighlighting adds color tags for JSON syntax highlighting.
+func formatDetailWithHighlighting(data string) string {
+	lines := strings.Split(data, "\n")
+	var result []string
+
+	for _, line := range lines {
+		highlighted := highlightJSONLine(line)
+		result = append(result, highlighted)
+	}
+
+	return strings.Join(result, "\n")
+}
+
+// highlightJSONLine adds tview color tags to a single line for JSON-like content.
+func highlightJSONLine(line string) string {
+	// Simple highlighting:
+	// - Keys (before colon) in accent color
+	// - Strings in green
+	// - Numbers in yellow
+	// - true/false/null in purple
+
+	// If line contains a colon that looks like a JSON key
+	if idx := strings.Index(line, ":"); idx > 0 {
+		prefix := line[:idx]
+		suffix := line[idx:]
+
+		// Check if prefix looks like a key (has quotes or is a simple word)
+		trimmed := strings.TrimSpace(prefix)
+		if strings.HasPrefix(trimmed, "\"") || strings.HasPrefix(trimmed, "'") {
+			// JSON key with quotes
+			return fmt.Sprintf("[%s]%s[-]%s", ui.TagAccent(), prefix, highlightJSONValue(suffix))
+		} else if !strings.Contains(trimmed, " ") && len(trimmed) > 0 {
+			// Simple key without quotes (like "Details:", "Result:")
+			return fmt.Sprintf("[%s::b]%s[-:-:-]%s", ui.TagAccent(), prefix, highlightJSONValue(suffix))
+		}
+	}
+
+	return highlightJSONValue(line)
+}
+
+// highlightJSONValue highlights JSON values (strings, numbers, booleans).
+func highlightJSONValue(s string) string {
+	// Replace common JSON patterns with highlighted versions
+	result := s
+
+	// Highlight string values (simple approach)
+	// This is a basic implementation - a full JSON parser would be more robust
+
+	// Highlight booleans and null
+	result = strings.ReplaceAll(result, "true", fmt.Sprintf("[%s]true[-]", ui.TagCompleted()))
+	result = strings.ReplaceAll(result, "false", fmt.Sprintf("[%s]false[-]", ui.TagFailed()))
+	result = strings.ReplaceAll(result, "null", fmt.Sprintf("[%s]null[-]", ui.TagFgDim()))
+
+	return result
 }
