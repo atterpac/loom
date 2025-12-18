@@ -2,6 +2,7 @@ package view
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -247,16 +248,31 @@ func (wd *WorkflowDetail) updateEventDetail(ev temporal.HistoryEvent) {
 	wd.eventDetailView.SetText(detailText)
 }
 
-// formatEventDetails parses comma-separated key:value pairs and formats them nicely
+// formatEventDetails parses event details and formats them with pretty JSON.
 func formatEventDetails(details string) string {
 	if details == "" {
 		return fmt.Sprintf("[%s]No details[-]", ui.TagFgDim())
 	}
 
-	// Split on ", " to get individual fields
-	parts := strings.Split(details, ", ")
+	// First check if the whole thing is JSON
+	trimmed := strings.TrimSpace(details)
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		formatted := formatJSONPretty(details)
+		return highlightFormattedJSONWorkflow(formatted)
+	}
 
-	// First pass: find the maximum key length for alignment
+	// Handle key-value format with embedded JSON
+	return formatKeyValueDetailsWorkflow(details)
+}
+
+// formatKeyValueDetailsWorkflow formats key-value style details with embedded JSON.
+func formatKeyValueDetailsWorkflow(details string) string {
+	var result strings.Builder
+
+	// Split by commas while preserving JSON objects
+	parts := splitPreservingJSONWorkflow(details)
+
+	// First pass: find max key length for alignment
 	type kvPair struct {
 		key   string
 		value string
@@ -270,9 +286,11 @@ func formatEventDetails(details string) string {
 			continue
 		}
 
-		if idx := strings.Index(part, ": "); idx > 0 {
-			key := part[:idx]
-			value := part[idx+2:]
+		// Find the key-value split point (first colon not inside JSON)
+		colonIdx := findKeyColonIndex(part)
+		if colonIdx > 0 {
+			key := strings.TrimSpace(part[:colonIdx])
+			value := strings.TrimSpace(part[colonIdx+1:])
 			pairs = append(pairs, kvPair{key, value})
 			if len(key) > maxKeyLen {
 				maxKeyLen = len(key)
@@ -283,18 +301,152 @@ func formatEventDetails(details string) string {
 	}
 
 	// Second pass: format with aligned keys
-	var sb strings.Builder
-	for _, kv := range pairs {
+	for i, kv := range pairs {
+		if i > 0 {
+			result.WriteString("\n")
+		}
+
 		if kv.key != "" {
-			// Pad key to maxKeyLen for alignment
+			// Pad key for alignment
 			paddedKey := kv.key + strings.Repeat(" ", maxKeyLen-len(kv.key))
-			sb.WriteString(fmt.Sprintf("[%s::b]%s[-:-:-]  [%s]%s[-]\n", ui.TagFgDim(), paddedKey, ui.TagFg(), kv.value))
+
+			// Check if value is JSON
+			value := strings.TrimSpace(kv.value)
+			if strings.HasPrefix(value, "{") || strings.HasPrefix(value, "[") {
+				formatted := formatJSONPretty(value)
+				if formatted != value {
+					// JSON was successfully formatted - put it on next line at left margin
+					result.WriteString(fmt.Sprintf("[%s::b]%s[-:-:-]\n", ui.TagFgDim(), paddedKey))
+					result.WriteString(highlightFormattedJSONWorkflow(formatted))
+				} else {
+					result.WriteString(fmt.Sprintf("[%s::b]%s[-:-:-]  ", ui.TagFgDim(), paddedKey))
+					result.WriteString(highlightJSONLineWorkflow(value))
+				}
+			} else {
+				result.WriteString(fmt.Sprintf("[%s::b]%s[-:-:-]  ", ui.TagFgDim(), paddedKey))
+				result.WriteString(fmt.Sprintf("[%s]%s[-]", ui.TagFg(), highlightValuesWorkflow(value)))
+			}
 		} else {
-			sb.WriteString(fmt.Sprintf("[%s]%s[-]\n", ui.TagFg(), kv.value))
+			result.WriteString(fmt.Sprintf("[%s]%s[-]", ui.TagFg(), kv.value))
 		}
 	}
 
-	return strings.TrimSuffix(sb.String(), "\n")
+	return result.String()
+}
+
+// splitPreservingJSONWorkflow splits a string by commas while preserving JSON objects.
+func splitPreservingJSONWorkflow(s string) []string {
+	var parts []string
+	var current strings.Builder
+	depth := 0
+
+	for _, ch := range s {
+		switch ch {
+		case '{', '[':
+			depth++
+			current.WriteRune(ch)
+		case '}', ']':
+			depth--
+			current.WriteRune(ch)
+		case ',':
+			if depth == 0 {
+				parts = append(parts, current.String())
+				current.Reset()
+			} else {
+				current.WriteRune(ch)
+			}
+		default:
+			current.WriteRune(ch)
+		}
+	}
+
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+
+	return parts
+}
+
+// findKeyColonIndex finds the index of the colon that separates key from value.
+// It ignores colons inside JSON objects or strings.
+func findKeyColonIndex(s string) int {
+	depth := 0
+	inString := false
+	for i, ch := range s {
+		switch ch {
+		case '"':
+			inString = !inString
+		case '{', '[':
+			if !inString {
+				depth++
+			}
+		case '}', ']':
+			if !inString {
+				depth--
+			}
+		case ':':
+			if depth == 0 && !inString {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// formatJSONPretty attempts to format a string as pretty JSON.
+func formatJSONPretty(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return s
+	}
+
+	var parsed interface{}
+	if err := json.Unmarshal([]byte(s), &parsed); err != nil {
+		return s
+	}
+
+	pretty, err := json.MarshalIndent(parsed, "", "  ")
+	if err != nil {
+		return s
+	}
+
+	return string(pretty)
+}
+
+// highlightFormattedJSONWorkflow applies syntax highlighting to formatted JSON.
+func highlightFormattedJSONWorkflow(formatted string) string {
+	lines := strings.Split(formatted, "\n")
+	var result []string
+	for _, line := range lines {
+		result = append(result, highlightJSONLineWorkflow(line))
+	}
+	return strings.Join(result, "\n")
+}
+
+// highlightJSONLineWorkflow highlights a single line of JSON content.
+func highlightJSONLineWorkflow(line string) string {
+	// Check for key: value pattern
+	if colonIdx := strings.Index(line, ":"); colonIdx > 0 {
+		prefix := line[:colonIdx]
+		suffix := line[colonIdx+1:]
+
+		trimmed := strings.TrimSpace(prefix)
+		if strings.HasPrefix(trimmed, "\"") && strings.HasSuffix(trimmed, "\"") {
+			// JSON key with quotes - use accent color
+			return fmt.Sprintf("[%s]%s[-]:[%s]%s[-]", ui.TagAccent(), prefix, ui.TagFg(), highlightValuesWorkflow(suffix))
+		}
+	}
+
+	return highlightValuesWorkflow(line)
+}
+
+// highlightValuesWorkflow highlights JSON values (booleans, null).
+func highlightValuesWorkflow(s string) string {
+	result := s
+	result = strings.ReplaceAll(result, "true", fmt.Sprintf("[%s]true[-]", ui.TagCompleted()))
+	result = strings.ReplaceAll(result, "false", fmt.Sprintf("[%s]false[-]", ui.TagFailed()))
+	result = strings.ReplaceAll(result, "null", fmt.Sprintf("[%s]null[-]", ui.TagFgDim()))
+	return result
 }
 
 func (wd *WorkflowDetail) populateEventTable() {
@@ -344,6 +496,12 @@ func (wd *WorkflowDetail) Start() {
 			// Navigate to event history/graph view
 			wd.app.NavigateToEvents(wd.workflowID, wd.runID)
 			return nil
+		case 'y':
+			wd.yankEventData()
+			return nil
+		case 'd':
+			wd.showEventDetailModal()
+			return nil
 		case 'c':
 			wd.showCancelConfirm()
 			return nil
@@ -385,6 +543,8 @@ func (wd *WorkflowDetail) Stop() {
 func (wd *WorkflowDetail) Hints() []ui.KeyHint {
 	hints := []ui.KeyHint{
 		{Key: "e", Description: "Event Graph"},
+		{Key: "d", Description: "Detail"},
+		{Key: "y", Description: "Yank"},
 		{Key: "r", Description: "Refresh"},
 		{Key: "j/k", Description: "Navigate"},
 	}
@@ -915,4 +1075,246 @@ func (wd *WorkflowDetail) showQueryError(queryType, errMsg string) {
 
 	wd.app.UI().Pages().AddPage("query-result", modal, true, true)
 	wd.app.UI().SetFocus(modal)
+}
+
+// Yank and detail methods
+
+// getSelectedEventDetails returns the details for the currently selected event.
+func (wd *WorkflowDetail) getSelectedEventDetails() (string, string) {
+	row := wd.eventTable.SelectedRow()
+	if row < 0 || row >= len(wd.events) {
+		return "", ""
+	}
+	ev := wd.events[row]
+	return ev.Type, prettyPrintJSONDetail(ev.Details)
+}
+
+// yankEventData copies the selected event's details to clipboard.
+func (wd *WorkflowDetail) yankEventData() {
+	eventType, data := wd.getSelectedEventDetails()
+	if data == "" {
+		return
+	}
+
+	if err := ui.CopyToClipboard(data); err != nil {
+		wd.eventDetailView.SetText(fmt.Sprintf("[%s]%s Failed to copy: %s[-]",
+			ui.TagFailed(), ui.IconFailed, err.Error()))
+		return
+	}
+
+	// Show success feedback
+	wd.eventDetailView.SetText(fmt.Sprintf(`
+[%s::b]Copied to clipboard[-:-:-]
+
+[%s]%s[-]
+
+[%s]%s[-]`,
+		ui.TagPanelTitle(),
+		ui.TagAccent(), eventType,
+		ui.TagCompleted(), "Event data copied!"))
+
+	// Restore detail after a brief delay
+	go func() {
+		time.Sleep(1500 * time.Millisecond)
+		wd.app.UI().QueueUpdateDraw(func() {
+			row := wd.eventTable.SelectedRow()
+			if row >= 0 && row < len(wd.events) {
+				wd.updateEventDetail(wd.events[row])
+			}
+		})
+	}()
+}
+
+// showEventDetailModal shows a full-screen modal with the event details.
+func (wd *WorkflowDetail) showEventDetailModal() {
+	eventType, data := wd.getSelectedEventDetails()
+	if data == "" {
+		return
+	}
+
+	// Create scrollable text view for the detail
+	textView := tview.NewTextView()
+	textView.SetDynamicColors(true)
+	textView.SetScrollable(true)
+	textView.SetWordWrap(true)
+	textView.SetBackgroundColor(ui.ColorBg())
+	textView.SetTextColor(ui.ColorFg())
+
+	// Format with syntax highlighting
+	formattedData := formatDetailViewWithHighlighting(data)
+	textView.SetText(formattedData)
+
+	// Create modal using the base Modal component for consistent styling
+	modal := ui.NewModal(ui.ModalConfig{
+		Title:     "Detail",
+		Width:     80,
+		Height:    20,
+		MinHeight: 10,
+		MaxHeight: 30,
+		Backdrop:  true,
+	})
+	modal.SetContent(textView)
+	modal.SetHints([]ui.KeyHint{
+		{Key: "j/k", Description: "Scroll"},
+		{Key: "g/G", Description: "Top/Bottom"},
+		{Key: "y", Description: "Yank"},
+		{Key: "q", Description: "Close"},
+	})
+
+	// Update panel title with event type
+	modal.GetPanel().SetTitle(fmt.Sprintf("Detail: %s", truncateEventTypeStr(eventType)))
+
+	modal.SetOnClose(func() {
+		wd.closeModal("event-detail")
+	})
+
+	// Input handler for the modal
+	textView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEscape:
+			wd.closeModal("event-detail")
+			return nil
+		case tcell.KeyRune:
+			switch event.Rune() {
+			case 'q':
+				wd.closeModal("event-detail")
+				return nil
+			case 'y':
+				if err := ui.CopyToClipboard(data); err == nil {
+					// Show brief feedback
+					title := fmt.Sprintf("Detail: %s", truncateEventTypeStr(eventType))
+					modal.GetPanel().SetTitle("Copied!")
+					modal.GetPanel().SetTitleColor(ui.ColorCompleted())
+					go func() {
+						time.Sleep(1 * time.Second)
+						wd.app.UI().QueueUpdateDraw(func() {
+							modal.GetPanel().SetTitle(title)
+							modal.GetPanel().SetTitleColor(tcell.ColorDefault)
+						})
+					}()
+				}
+				return nil
+			case 'j':
+				row, _ := textView.GetScrollOffset()
+				textView.ScrollTo(row+1, 0)
+				return nil
+			case 'k':
+				row, _ := textView.GetScrollOffset()
+				if row > 0 {
+					textView.ScrollTo(row-1, 0)
+				}
+				return nil
+			case 'G':
+				textView.ScrollToEnd()
+				return nil
+			case 'g':
+				textView.ScrollTo(0, 0)
+				return nil
+			}
+		}
+		return event
+	})
+
+	wd.app.UI().Pages().AddPage("event-detail", modal, true, true)
+	wd.app.UI().SetFocus(textView)
+}
+
+// truncateEventTypeStr shortens long event type names for the title.
+func truncateEventTypeStr(eventType string) string {
+	if len(eventType) > 30 {
+		return eventType[:27] + "..."
+	}
+	return eventType
+}
+
+// prettyPrintJSONDetail attempts to format JSON in the details string.
+func prettyPrintJSONDetail(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return s
+	}
+
+	// Try to parse the whole thing as JSON first
+	if strings.HasPrefix(s, "{") || strings.HasPrefix(s, "[") {
+		var parsed interface{}
+		if err := json.Unmarshal([]byte(s), &parsed); err == nil {
+			pretty, err := json.MarshalIndent(parsed, "", "  ")
+			if err == nil {
+				return string(pretty)
+			}
+		}
+	}
+
+	// Otherwise, try to find and format JSON embedded in the string
+	// Look for patterns like "Result: {...}" or "Input: {...}"
+	var result strings.Builder
+	parts := strings.Split(s, ", ")
+	for i, part := range parts {
+		if i > 0 {
+			result.WriteString("\n")
+		}
+
+		// Check if this part has embedded JSON
+		if colonIdx := strings.Index(part, ": "); colonIdx > 0 {
+			key := part[:colonIdx]
+			value := part[colonIdx+2:]
+
+			// Try to parse and pretty-print the value as JSON
+			if strings.HasPrefix(value, "{") || strings.HasPrefix(value, "[") {
+				var parsed interface{}
+				if err := json.Unmarshal([]byte(value), &parsed); err == nil {
+					pretty, err := json.MarshalIndent(parsed, "", "  ")
+					if err == nil {
+						result.WriteString(fmt.Sprintf("%s:\n%s", key, string(pretty)))
+						continue
+					}
+				}
+			}
+			result.WriteString(fmt.Sprintf("%s: %s", key, value))
+		} else {
+			result.WriteString(part)
+		}
+	}
+
+	return result.String()
+}
+
+// formatDetailViewWithHighlighting adds color tags for syntax highlighting.
+func formatDetailViewWithHighlighting(data string) string {
+	lines := strings.Split(data, "\n")
+	var result []string
+
+	for _, line := range lines {
+		highlighted := highlightDetailLine(line)
+		result = append(result, highlighted)
+	}
+
+	return strings.Join(result, "\n")
+}
+
+// highlightDetailLine adds tview color tags to a single line.
+func highlightDetailLine(line string) string {
+	// If line contains a colon that looks like a JSON key
+	if idx := strings.Index(line, ":"); idx > 0 {
+		prefix := line[:idx]
+		suffix := line[idx:]
+
+		trimmed := strings.TrimSpace(prefix)
+		if strings.HasPrefix(trimmed, "\"") || strings.HasPrefix(trimmed, "'") {
+			return fmt.Sprintf("[%s]%s[-]%s", ui.TagAccent(), prefix, highlightDetailValue(suffix))
+		} else if !strings.Contains(trimmed, " ") && len(trimmed) > 0 {
+			return fmt.Sprintf("[%s::b]%s[-:-:-]%s", ui.TagAccent(), prefix, highlightDetailValue(suffix))
+		}
+	}
+
+	return highlightDetailValue(line)
+}
+
+// highlightDetailValue highlights JSON values.
+func highlightDetailValue(s string) string {
+	result := s
+	result = strings.ReplaceAll(result, "true", fmt.Sprintf("[%s]true[-]", ui.TagCompleted()))
+	result = strings.ReplaceAll(result, "false", fmt.Sprintf("[%s]false[-]", ui.TagFailed()))
+	result = strings.ReplaceAll(result, "null", fmt.Sprintf("[%s]null[-]", ui.TagFgDim()))
+	return result
 }

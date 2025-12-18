@@ -69,12 +69,14 @@ func (nl *NamespaceList) setup() {
 	nl.rightPanel = ui.NewPanel("Details")
 	nl.rightPanel.SetContent(nl.preview)
 
-	// Selection change handler to update preview
+	// Selection change handler to update preview and hints
 	nl.table.SetSelectionChangedFunc(func(row, col int) {
 		// Adjust for header row (row 0 is header, data starts at row 1)
 		dataRow := row - 1
 		if dataRow >= 0 && dataRow < len(nl.namespaces) {
 			nl.updatePreview(nl.namespaces[dataRow])
+			// Update hints to show Delete/Deprecate based on selected namespace state
+			nl.app.UI().Menu().SetHints(nl.Hints())
 		}
 	})
 
@@ -329,6 +331,9 @@ func (nl *NamespaceList) Start() {
 		case 'D':
 			nl.showDeprecateConfirm()
 			return nil
+		case 'X':
+			nl.showDeleteConfirm()
+			return nil
 		}
 		return event
 	})
@@ -351,19 +356,30 @@ func (nl *NamespaceList) Stop() {
 
 // Hints returns keybinding hints for this view.
 func (nl *NamespaceList) Hints() []ui.KeyHint {
-	return []ui.KeyHint{
+	hints := []ui.KeyHint{
 		{Key: "enter", Description: "Workflows"},
 		{Key: "i", Description: "Info"},
 		{Key: "n", Description: "Create"},
 		{Key: "e", Description: "Edit"},
-		{Key: "D", Description: "Deprecate"},
-		{Key: "p", Description: "Preview"},
-		{Key: "r", Description: "Refresh"},
-		{Key: "a", Description: "Auto-refresh"},
-		{Key: "T", Description: "Theme"},
-		{Key: "?", Description: "Help"},
-		{Key: "q", Description: "Quit"},
 	}
+
+	// Show Delete for deprecated namespaces, Deprecate for active ones
+	ns := nl.getSelectedNamespace()
+	if ns != nil && ns.State == "Deprecated" {
+		hints = append(hints, ui.KeyHint{Key: "X", Description: "Delete"})
+	} else {
+		hints = append(hints, ui.KeyHint{Key: "D", Description: "Deprecate"})
+	}
+
+	hints = append(hints,
+		ui.KeyHint{Key: "p", Description: "Preview"},
+		ui.KeyHint{Key: "r", Description: "Refresh"},
+		ui.KeyHint{Key: "a", Description: "Auto-refresh"},
+		ui.KeyHint{Key: "T", Description: "Theme"},
+		ui.KeyHint{Key: "?", Description: "Help"},
+		ui.KeyHint{Key: "q", Description: "Quit"},
+	)
+	return hints
 }
 
 // Focus sets focus to the table (which has the input handlers).
@@ -604,6 +620,55 @@ func (nl *NamespaceList) executeDeprecate(name string) {
 				nl.showError(err)
 			} else {
 				nl.loadData() // Refresh to show deprecated state
+			}
+		})
+	}()
+}
+
+func (nl *NamespaceList) showDeleteConfirm() {
+	ns := nl.getSelectedNamespace()
+	if ns == nil || ns.State != "Deprecated" {
+		return
+	}
+
+	command := fmt.Sprintf(`temporal operator namespace delete \
+  --namespace %s`,
+		ns.Name)
+
+	modal := ui.NewConfirmModal(
+		"Delete Namespace",
+		fmt.Sprintf("Permanently delete namespace %s?", ns.Name),
+		command,
+	).SetWarning("This action is IRREVERSIBLE. All workflow history and data in this namespace will be permanently deleted.").
+		SetOnConfirm(func() {
+			nl.executeDelete(ns.Name)
+		}).SetOnCancel(func() {
+		nl.closeModal("confirm-delete")
+	})
+
+	nl.app.UI().Pages().AddPage("confirm-delete", modal, true, true)
+	nl.app.UI().SetFocus(modal)
+}
+
+func (nl *NamespaceList) executeDelete(name string) {
+	provider := nl.app.Provider()
+	if provider == nil {
+		nl.closeModal("confirm-delete")
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		err := provider.DeleteNamespace(ctx, name)
+
+		nl.app.UI().QueueUpdateDraw(func() {
+			nl.closeModal("confirm-delete")
+			if err != nil {
+				nl.showError(err)
+			} else {
+				nl.loadData() // Refresh to remove deleted namespace
 			}
 		})
 	}()
