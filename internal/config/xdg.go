@@ -6,24 +6,24 @@ import (
 )
 
 // ConfigDir returns the configuration directory path following XDG spec.
-// Priority: $XDG_CONFIG_HOME/loom > ~/.config/loom > ~/.loom
+// Priority: $XDG_CONFIG_HOME/tempo > ~/.config/tempo > ~/.tempo
 func ConfigDir() string {
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "loom")
+		return filepath.Join(xdg, "tempo")
 	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ".loom"
+		return ".tempo"
 	}
 
-	// Prefer ~/.config/loom if .config exists
+	// Prefer ~/.config/tempo if .config exists
 	configDir := filepath.Join(home, ".config")
 	if info, err := os.Stat(configDir); err == nil && info.IsDir() {
-		return filepath.Join(configDir, "loom")
+		return filepath.Join(configDir, "tempo")
 	}
 
-	return filepath.Join(home, ".loom")
+	return filepath.Join(home, ".tempo")
 }
 
 // ConfigPath returns the full path to the config file.

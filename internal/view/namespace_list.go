@@ -3,13 +3,11 @@ package view
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"strings"
 	"time"
 
-	"github.com/atterpac/loom/internal/config"
-	"github.com/atterpac/loom/internal/temporal"
-	"github.com/atterpac/loom/internal/ui"
+	"github.com/atterpac/jig/components"
+	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/tempo/internal/temporal"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -17,26 +15,25 @@ import (
 // NamespaceList displays a list of Temporal namespaces with a preview panel.
 type NamespaceList struct {
 	*tview.Flex
-	table            *ui.Table
-	leftPanel        *ui.Panel
-	rightPanel       *ui.Panel
-	preview          *tview.TextView
-	emptyState       *ui.EmptyState
-	app              *App
-	namespaces       []temporal.Namespace
-	loading          bool
-	autoRefresh      bool
-	showPreview      bool
-	refreshTicker    *time.Ticker
-	stopRefresh      chan struct{}
-	unsubscribeTheme func()
+	table         *components.Table
+	leftPanel     *components.Panel
+	rightPanel    *components.Panel
+	preview       *tview.TextView
+	emptyState    *components.EmptyState
+	app           *App
+	namespaces    []temporal.Namespace
+	loading       bool
+	autoRefresh   bool
+	showPreview   bool
+	refreshTicker *time.Ticker
+	stopRefresh   chan struct{}
 }
 
 // NewNamespaceList creates a new namespace list view.
 func NewNamespaceList(app *App) *NamespaceList {
 	nl := &NamespaceList{
 		Flex:        tview.NewFlex().SetDirection(tview.FlexColumn),
-		table:       ui.NewTable(),
+		table:       components.NewTable(),
 		preview:     tview.NewTextView(),
 		app:         app,
 		namespaces:  []temporal.Namespace{},
@@ -50,33 +47,34 @@ func NewNamespaceList(app *App) *NamespaceList {
 func (nl *NamespaceList) setup() {
 	nl.table.SetHeaders("NAME", "STATE", "RETENTION")
 	nl.table.SetBorder(false)
-	nl.table.SetBackgroundColor(ui.ColorBg())
-	nl.SetBackgroundColor(ui.ColorBg())
+	nl.table.SetBackgroundColor(theme.Bg())
+	nl.SetBackgroundColor(theme.Bg())
 
 	// Configure preview
 	nl.preview.SetDynamicColors(true)
-	nl.preview.SetBackgroundColor(ui.ColorBg())
-	nl.preview.SetTextColor(ui.ColorFg())
+	nl.preview.SetBackgroundColor(theme.Bg())
+	nl.preview.SetTextColor(theme.Fg())
 	nl.preview.SetWordWrap(true)
 
 	// Create empty state
-	nl.emptyState = ui.EmptyStateNoNamespaces()
+	nl.emptyState = components.NewEmptyState().
+		SetIcon(theme.IconDatabase).
+		SetTitle("No Namespaces").
+		SetMessage("No namespaces found")
 
-	// Create panels
-	nl.leftPanel = ui.NewPanel("Namespaces")
+	// Create panels with icons (blubber pattern)
+	nl.leftPanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Namespaces", theme.IconNamespace))
 	nl.leftPanel.SetContent(nl.table)
 
-	nl.rightPanel = ui.NewPanel("Details")
+	nl.rightPanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Details", theme.IconInfo))
 	nl.rightPanel.SetContent(nl.preview)
 
 	// Selection change handler to update preview and hints
 	nl.table.SetSelectionChangedFunc(func(row, col int) {
-		// Adjust for header row (row 0 is header, data starts at row 1)
 		dataRow := row - 1
 		if dataRow >= 0 && dataRow < len(nl.namespaces) {
 			nl.updatePreview(nl.namespaces[dataRow])
-			// Update hints to show Delete/Deprecate based on selected namespace state
-			nl.app.UI().Menu().SetHints(nl.Hints())
+			nl.app.JigApp().Menu().SetHints(nl.Hints())
 		}
 	})
 
@@ -84,22 +82,6 @@ func (nl *NamespaceList) setup() {
 	nl.table.SetOnSelect(func(row int) {
 		if row >= 0 && row < len(nl.namespaces) {
 			nl.app.NavigateToWorkflows(nl.namespaces[row].Name)
-		}
-	})
-
-	// Register for theme changes
-	nl.unsubscribeTheme = ui.OnThemeChange(func(_ *config.ParsedTheme) {
-		nl.SetBackgroundColor(ui.ColorBg())
-		nl.preview.SetBackgroundColor(ui.ColorBg())
-		nl.preview.SetTextColor(ui.ColorFg())
-		// Re-render table with new colors
-		if len(nl.namespaces) > 0 {
-			nl.populateTable()
-			// Explicitly update preview with new theme colors
-			row := nl.table.SelectedRow()
-			if row >= 0 && row < len(nl.namespaces) {
-				nl.updatePreview(nl.namespaces[row])
-			}
 		}
 	})
 
@@ -121,12 +103,30 @@ func (nl *NamespaceList) togglePreview() {
 	nl.buildLayout()
 }
 
+// RefreshTheme updates all component colors after a theme change.
+func (nl *NamespaceList) RefreshTheme() {
+	bg := theme.Bg()
+
+	// Update main container
+	nl.SetBackgroundColor(bg)
+
+	// Update table
+	nl.table.SetBackgroundColor(bg)
+
+	// Update preview
+	nl.preview.SetBackgroundColor(bg)
+	nl.preview.SetTextColor(theme.Fg())
+
+	// Re-render table with new theme colors
+	nl.populateTable()
+}
+
 func (nl *NamespaceList) updatePreview(ns temporal.Namespace) {
-	stateIcon := ui.IconConnected
-	stateColor := ui.TagRunning()
+	stateIcon := theme.IconConnected
+	stateColor := theme.StatusColorTag("Running")
 	if ns.State == "Deprecated" {
-		stateIcon = ui.IconDisconnected
-		stateColor = ui.TagFailed()
+		stateIcon = theme.IconDisconnected
+		stateColor = theme.StatusColorTag("Failed")
 	}
 
 	text := fmt.Sprintf(`[%s::b]Name[-:-:-]
@@ -143,16 +143,16 @@ func (nl *NamespaceList) updatePreview(ns temporal.Namespace) {
 
 [%s::b]Owner[-:-:-]
   [%s]%s[-]`,
-		ui.TagFgDim(),
-		ui.TagFg(), ns.Name,
-		ui.TagFgDim(),
+		theme.TagFgDim(),
+		theme.TagFg(), ns.Name,
+		theme.TagFgDim(),
 		stateColor, stateIcon, ns.State,
-		ui.TagFgDim(),
-		ui.TagFg(), ns.RetentionPeriod,
-		ui.TagFgDim(),
-		ui.TagFg(), valueOrEmpty(ns.Description, "No description"),
-		ui.TagFgDim(),
-		ui.TagFg(), valueOrEmpty(ns.OwnerEmail, "No owner"),
+		theme.TagFgDim(),
+		theme.TagFg(), ns.RetentionPeriod,
+		theme.TagFgDim(),
+		theme.TagFg(), valueOrEmpty(ns.Description, "No description"),
+		theme.TagFgDim(),
+		theme.TagFg(), valueOrEmpty(ns.OwnerEmail, "No owner"),
 	)
 	nl.preview.SetText(text)
 }
@@ -166,13 +166,11 @@ func valueOrEmpty(s, fallback string) string {
 
 func (nl *NamespaceList) setLoading(loading bool) {
 	nl.loading = loading
-	// Loading state shown via breadcrumb or status, not title
 }
 
 func (nl *NamespaceList) loadData() {
 	provider := nl.app.Provider()
 	if provider == nil {
-		// Fallback to mock data if no provider
 		nl.loadMockData()
 		return
 	}
@@ -184,7 +182,7 @@ func (nl *NamespaceList) loadData() {
 
 		namespaces, err := provider.ListNamespaces(ctx)
 
-		nl.app.UI().QueueUpdateDraw(func() {
+		nl.app.JigApp().QueueUpdateDraw(func() {
 			nl.setLoading(false)
 			if err != nil {
 				nl.showError(err)
@@ -197,7 +195,6 @@ func (nl *NamespaceList) loadData() {
 }
 
 func (nl *NamespaceList) loadMockData() {
-	// Mock data fallback when no provider is configured
 	nl.namespaces = []temporal.Namespace{
 		{Name: "default", State: "Active", RetentionPeriod: "7 days"},
 		{Name: "production", State: "Active", RetentionPeriod: "30 days"},
@@ -209,32 +206,28 @@ func (nl *NamespaceList) loadMockData() {
 }
 
 func (nl *NamespaceList) populateTable() {
-	// Preserve current selection
 	currentRow := nl.table.SelectedRow()
 
 	nl.table.ClearRows()
 	nl.table.SetHeaders("NAME", "STATE", "RETENTION")
 
-	// Show empty state if no namespaces
 	if len(nl.namespaces) == 0 {
 		nl.leftPanel.SetContent(nl.emptyState)
 		nl.preview.SetText("")
 		return
 	}
 
-	// Show table with data
 	nl.leftPanel.SetContent(nl.table)
 
 	for _, ns := range nl.namespaces {
-		nl.table.AddStyledRow(ns.State,
-			ui.IconNamespace+" "+ns.Name,
+		nl.table.AddStyledRowSimple(ns.State,
+			theme.IconDatabase+" "+ns.Name,
 			ns.State,
 			ns.RetentionPeriod,
 		)
 	}
 
 	if nl.table.RowCount() > 0 {
-		// Restore previous selection if valid, otherwise select first row
 		if currentRow >= 0 && currentRow < len(nl.namespaces) {
 			nl.table.SelectRow(currentRow)
 			nl.updatePreview(nl.namespaces[currentRow])
@@ -250,8 +243,8 @@ func (nl *NamespaceList) populateTable() {
 func (nl *NamespaceList) showError(err error) {
 	nl.table.ClearRows()
 	nl.table.SetHeaders("NAME", "STATE", "RETENTION")
-	nl.table.AddColoredRow(ui.ColorFailed(),
-		ui.IconFailed+" Error loading namespaces",
+	nl.table.AddRowWithColor(theme.Error(),
+		theme.IconError+" Error loading namespaces",
 		err.Error(),
 		"",
 	)
@@ -272,7 +265,7 @@ func (nl *NamespaceList) startAutoRefresh() {
 		for {
 			select {
 			case <-nl.refreshTicker.C:
-				nl.app.UI().QueueUpdateDraw(func() {
+				nl.app.JigApp().QueueUpdateDraw(func() {
 					nl.loadData()
 				})
 			case <-nl.stopRefresh:
@@ -287,7 +280,6 @@ func (nl *NamespaceList) stopAutoRefresh() {
 		nl.refreshTicker.Stop()
 		nl.refreshTicker = nil
 	}
-	// Signal stop to the goroutine
 	select {
 	case nl.stopRefresh <- struct{}{}:
 	default:
@@ -304,7 +296,7 @@ func (nl *NamespaceList) Start() {
 	nl.table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Rune() {
 		case 'q':
-			nl.app.UI().Stop()
+			nl.app.Stop()
 			return nil
 		case 'a':
 			nl.toggleAutoRefresh()
@@ -316,28 +308,26 @@ func (nl *NamespaceList) Start() {
 			nl.togglePreview()
 			return nil
 		case 'i':
-			// Navigate to full detail view
 			ns := nl.getSelectedNamespace()
 			if ns != nil {
 				nl.app.NavigateToNamespaceDetail(ns.Name)
 			}
 			return nil
 		case 'n':
-			nl.showCreateForm()
+			// TODO: Create namespace form
 			return nil
 		case 'e':
-			nl.showEditForm()
+			// TODO: Edit namespace form
 			return nil
 		case 'D':
-			nl.showDeprecateConfirm()
+			// TODO: Deprecate confirm
 			return nil
 		case 'X':
-			nl.showDeleteConfirm()
+			// TODO: Delete confirm
 			return nil
 		}
 		return event
 	})
-	// Load data when view becomes active
 	nl.loadData()
 }
 
@@ -345,46 +335,37 @@ func (nl *NamespaceList) Start() {
 func (nl *NamespaceList) Stop() {
 	nl.table.SetInputCapture(nil)
 	nl.stopAutoRefresh()
-	if nl.unsubscribeTheme != nil {
-		nl.unsubscribeTheme()
-	}
-	// Clean up component theme listeners to prevent memory leaks and visual glitches
-	nl.table.Destroy()
-	nl.leftPanel.Destroy()
-	nl.rightPanel.Destroy()
 }
 
 // Hints returns keybinding hints for this view.
-func (nl *NamespaceList) Hints() []ui.KeyHint {
-	hints := []ui.KeyHint{
+func (nl *NamespaceList) Hints() []KeyHint {
+	hints := []KeyHint{
 		{Key: "enter", Description: "Workflows"},
 		{Key: "i", Description: "Info"},
 		{Key: "n", Description: "Create"},
 		{Key: "e", Description: "Edit"},
 	}
 
-	// Show Delete for deprecated namespaces, Deprecate for active ones
 	ns := nl.getSelectedNamespace()
 	if ns != nil && ns.State == "Deprecated" {
-		hints = append(hints, ui.KeyHint{Key: "X", Description: "Delete"})
+		hints = append(hints, KeyHint{Key: "X", Description: "Delete"})
 	} else {
-		hints = append(hints, ui.KeyHint{Key: "D", Description: "Deprecate"})
+		hints = append(hints, KeyHint{Key: "D", Description: "Deprecate"})
 	}
 
 	hints = append(hints,
-		ui.KeyHint{Key: "p", Description: "Preview"},
-		ui.KeyHint{Key: "r", Description: "Refresh"},
-		ui.KeyHint{Key: "a", Description: "Auto-refresh"},
-		ui.KeyHint{Key: "T", Description: "Theme"},
-		ui.KeyHint{Key: "?", Description: "Help"},
-		ui.KeyHint{Key: "q", Description: "Quit"},
+		KeyHint{Key: "p", Description: "Preview"},
+		KeyHint{Key: "r", Description: "Refresh"},
+		KeyHint{Key: "a", Description: "Auto-refresh"},
+		KeyHint{Key: "T", Description: "Theme"},
+		KeyHint{Key: "?", Description: "Help"},
+		KeyHint{Key: "q", Description: "Quit"},
 	)
 	return hints
 }
 
-// Focus sets focus to the table (which has the input handlers).
+// Focus sets focus to the table.
 func (nl *NamespaceList) Focus(delegate func(p tview.Primitive)) {
-	// If showing empty state, focus the flex container instead
 	if len(nl.namespaces) == 0 {
 		delegate(nl.Flex)
 		return
@@ -394,290 +375,18 @@ func (nl *NamespaceList) Focus(delegate func(p tview.Primitive)) {
 
 // Draw applies theme colors dynamically and draws the view.
 func (nl *NamespaceList) Draw(screen tcell.Screen) {
-	bg := ui.ColorBg()
+	bg := theme.Bg()
 	nl.SetBackgroundColor(bg)
 	nl.preview.SetBackgroundColor(bg)
-	nl.preview.SetTextColor(ui.ColorFg())
+	nl.preview.SetTextColor(theme.Fg())
 	nl.Flex.Draw(screen)
 }
 
 // getSelectedNamespace returns the currently selected namespace.
 func (nl *NamespaceList) getSelectedNamespace() *temporal.Namespace {
-	row := nl.table.SelectedRow() // Use SelectedRow() which accounts for header
+	row := nl.table.SelectedRow()
 	if row >= 0 && row < len(nl.namespaces) {
 		return &nl.namespaces[row]
 	}
 	return nil
-}
-
-// CRUD Operations
-
-func (nl *NamespaceList) showCreateForm() {
-	form := ui.NewNamespaceForm()
-	form.ClearFields() // Ensure it's in create mode
-
-	form.SetOnSubmit(func(data ui.NamespaceFormData) {
-		nl.closeModal("namespace-form")
-		nl.showCreateConfirm(data)
-	}).SetOnCancel(func() {
-		nl.closeModal("namespace-form")
-	})
-
-	nl.app.UI().Pages().AddPage("namespace-form", form, true, true)
-	nl.app.UI().SetFocus(form)
-}
-
-func (nl *NamespaceList) showCreateConfirm(data ui.NamespaceFormData) {
-	command := fmt.Sprintf(`temporal namespace register \
-  --namespace %s \
-  --retention %dd`,
-		data.Name, data.RetentionDays)
-
-	if data.Description != "" {
-		command += fmt.Sprintf(` \
-  --description "%s"`, data.Description)
-	}
-	if data.OwnerEmail != "" {
-		command += fmt.Sprintf(` \
-  --owner-email "%s"`, data.OwnerEmail)
-	}
-
-	modal := ui.NewConfirmModal(
-		"Create Namespace",
-		fmt.Sprintf("Create namespace %s?", data.Name),
-		command,
-	).SetOnConfirm(func() {
-		nl.executeCreate(data)
-	}).SetOnCancel(func() {
-		nl.closeModal("confirm-create")
-	})
-
-	nl.app.UI().Pages().AddPage("confirm-create", modal, true, true)
-	nl.app.UI().SetFocus(modal)
-}
-
-func (nl *NamespaceList) executeCreate(data ui.NamespaceFormData) {
-	provider := nl.app.Provider()
-	if provider == nil {
-		nl.closeModal("confirm-create")
-		return
-	}
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-
-		req := temporal.NamespaceCreateRequest{
-			Name:          data.Name,
-			Description:   data.Description,
-			OwnerEmail:    data.OwnerEmail,
-			RetentionDays: data.RetentionDays,
-		}
-
-		err := provider.CreateNamespace(ctx, req)
-
-		nl.app.UI().QueueUpdateDraw(func() {
-			nl.closeModal("confirm-create")
-			if err != nil {
-				nl.showError(err)
-			} else {
-				nl.loadData() // Refresh to show new namespace
-			}
-		})
-	}()
-}
-
-func (nl *NamespaceList) showEditForm() {
-	ns := nl.getSelectedNamespace()
-	if ns == nil {
-		return
-	}
-
-	// Parse retention days from string
-	retentionDays := 30 // default
-	if ns.RetentionPeriod != "" && ns.RetentionPeriod != "N/A" {
-		parts := strings.Fields(ns.RetentionPeriod)
-		if len(parts) > 0 {
-			if days, err := strconv.Atoi(parts[0]); err == nil {
-				retentionDays = days
-			}
-		}
-	}
-
-	form := ui.NewNamespaceForm()
-	form.SetNamespace(ns.Name, retentionDays, ns.Description, ns.OwnerEmail)
-
-	form.SetOnSubmit(func(data ui.NamespaceFormData) {
-		nl.closeModal("namespace-form")
-		nl.showUpdateConfirm(data)
-	}).SetOnCancel(func() {
-		nl.closeModal("namespace-form")
-	})
-
-	nl.app.UI().Pages().AddPage("namespace-form", form, true, true)
-	nl.app.UI().SetFocus(form)
-}
-
-func (nl *NamespaceList) showUpdateConfirm(data ui.NamespaceFormData) {
-	command := fmt.Sprintf(`temporal namespace update \
-  --namespace %s \
-  --retention %dd \
-  --description "%s"`,
-		data.Name, data.RetentionDays, data.Description)
-
-	if data.OwnerEmail != "" {
-		command += fmt.Sprintf(` \
-  --owner-email "%s"`, data.OwnerEmail)
-	}
-
-	modal := ui.NewConfirmModal(
-		"Update Namespace",
-		fmt.Sprintf("Update namespace %s?", data.Name),
-		command,
-	).SetOnConfirm(func() {
-		nl.executeUpdate(data)
-	}).SetOnCancel(func() {
-		nl.closeModal("confirm-update")
-	})
-
-	nl.app.UI().Pages().AddPage("confirm-update", modal, true, true)
-	nl.app.UI().SetFocus(modal)
-}
-
-func (nl *NamespaceList) executeUpdate(data ui.NamespaceFormData) {
-	provider := nl.app.Provider()
-	if provider == nil {
-		nl.closeModal("confirm-update")
-		return
-	}
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		req := temporal.NamespaceUpdateRequest{
-			Name:          data.Name,
-			Description:   data.Description,
-			OwnerEmail:    data.OwnerEmail,
-			RetentionDays: data.RetentionDays,
-		}
-
-		err := provider.UpdateNamespace(ctx, req)
-
-		nl.app.UI().QueueUpdateDraw(func() {
-			nl.closeModal("confirm-update")
-			if err != nil {
-				nl.showError(err)
-			} else {
-				nl.loadData() // Refresh to show updated namespace
-			}
-		})
-	}()
-}
-
-func (nl *NamespaceList) showDeprecateConfirm() {
-	ns := nl.getSelectedNamespace()
-	if ns == nil || ns.State != "Active" {
-		return
-	}
-
-	command := fmt.Sprintf(`temporal namespace update \
-  --namespace %s \
-  --state DEPRECATED`,
-		ns.Name)
-
-	modal := ui.NewConfirmModal(
-		"Deprecate Namespace",
-		fmt.Sprintf("Deprecate namespace %s?", ns.Name),
-		command,
-	).SetWarning("Deprecated namespaces prevent new workflow executions. Existing workflows will continue. This can be reversed.").
-		SetOnConfirm(func() {
-			nl.executeDeprecate(ns.Name)
-		}).SetOnCancel(func() {
-		nl.closeModal("confirm-deprecate")
-	})
-
-	nl.app.UI().Pages().AddPage("confirm-deprecate", modal, true, true)
-	nl.app.UI().SetFocus(modal)
-}
-
-func (nl *NamespaceList) executeDeprecate(name string) {
-	provider := nl.app.Provider()
-	if provider == nil {
-		nl.closeModal("confirm-deprecate")
-		return
-	}
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		err := provider.DeprecateNamespace(ctx, name)
-
-		nl.app.UI().QueueUpdateDraw(func() {
-			nl.closeModal("confirm-deprecate")
-			if err != nil {
-				nl.showError(err)
-			} else {
-				nl.loadData() // Refresh to show deprecated state
-			}
-		})
-	}()
-}
-
-func (nl *NamespaceList) showDeleteConfirm() {
-	ns := nl.getSelectedNamespace()
-	if ns == nil || ns.State != "Deprecated" {
-		return
-	}
-
-	command := fmt.Sprintf(`temporal operator namespace delete \
-  --namespace %s`,
-		ns.Name)
-
-	modal := ui.NewConfirmModal(
-		"Delete Namespace",
-		fmt.Sprintf("Permanently delete namespace %s?", ns.Name),
-		command,
-	).SetWarning("This action is IRREVERSIBLE. All workflow history and data in this namespace will be permanently deleted.").
-		SetOnConfirm(func() {
-			nl.executeDelete(ns.Name)
-		}).SetOnCancel(func() {
-		nl.closeModal("confirm-delete")
-	})
-
-	nl.app.UI().Pages().AddPage("confirm-delete", modal, true, true)
-	nl.app.UI().SetFocus(modal)
-}
-
-func (nl *NamespaceList) executeDelete(name string) {
-	provider := nl.app.Provider()
-	if provider == nil {
-		nl.closeModal("confirm-delete")
-		return
-	}
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		err := provider.DeleteNamespace(ctx, name)
-
-		nl.app.UI().QueueUpdateDraw(func() {
-			nl.closeModal("confirm-delete")
-			if err != nil {
-				nl.showError(err)
-			} else {
-				nl.loadData() // Refresh to remove deleted namespace
-			}
-		})
-	}()
-}
-
-func (nl *NamespaceList) closeModal(name string) {
-	nl.app.UI().Pages().RemovePage(name)
-	// Restore focus to current view
-	if current := nl.app.UI().Pages().Current(); current != nil {
-		nl.app.UI().SetFocus(current)
-	}
 }

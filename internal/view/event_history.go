@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/atterpac/loom/internal/config"
-	"github.com/atterpac/loom/internal/temporal"
-	"github.com/atterpac/loom/internal/ui"
+	"github.com/atterpac/jig/components"
+	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/tempo/internal/temporal"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -34,62 +34,61 @@ type EventHistory struct {
 	viewMode EventViewMode
 
 	// List view components (original)
-	table *ui.Table
+	table *components.Table
 
 	// Tree view components
-	treeView  *ui.EventTreeView
+	treeView  *EventTreeView
 	treeNodes []*temporal.EventTreeNode
 
 	// Timeline view components
-	timelineView *ui.TimelineView
+	timelineView *TimelineView
 
 	// Shared components
-	leftPanel   *ui.Panel
-	rightPanel  *ui.Panel
+	leftPanel   *components.Panel
+	rightPanel  *components.Panel
 	sidePanel   *tview.TextView
 	sidePanelOn bool
 
 	// Data
-	events           []temporal.HistoryEvent
-	enhancedEvents   []temporal.EnhancedHistoryEvent
-	loading          bool
-	unsubscribeTheme func()
+	events         []temporal.HistoryEvent
+	enhancedEvents []temporal.EnhancedHistoryEvent
+	loading        bool
 }
 
 // NewEventHistory creates a new event history view.
 func NewEventHistory(app *App, workflowID, runID string) *EventHistory {
 	eh := &EventHistory{
-		Flex:        tview.NewFlex().SetDirection(tview.FlexColumn),
-		app:         app,
-		workflowID:  workflowID,
-		runID:       runID,
-		viewMode:    ViewModeTree, // Default to tree view
-		table:       ui.NewTable(),
-		treeView:    ui.NewEventTreeView(),
-		timelineView: ui.NewTimelineView(),
-		sidePanel:   tview.NewTextView(),
-		sidePanelOn: true,
+		Flex:         tview.NewFlex().SetDirection(tview.FlexColumn),
+		app:          app,
+		workflowID:   workflowID,
+		runID:        runID,
+		viewMode:     ViewModeTree, // Default to tree view
+		table:        components.NewTable(),
+		treeView:     NewEventTreeView(),
+		timelineView: NewTimelineView(),
+		sidePanel:    tview.NewTextView(),
+		sidePanelOn:  true,
 	}
 	eh.setup()
 	return eh
 }
 
 func (eh *EventHistory) setup() {
-	eh.SetBackgroundColor(ui.ColorBg())
+	eh.SetBackgroundColor(theme.Bg())
 
 	// Configure list view table
 	eh.table.SetHeaders("ID", "TIME", "TYPE", "DETAILS")
 	eh.table.SetBorder(false)
-	eh.table.SetBackgroundColor(ui.ColorBg())
+	eh.table.SetBackgroundColor(theme.Bg())
 
 	// Configure side panel
 	eh.sidePanel.SetDynamicColors(true)
 	eh.sidePanel.SetTextAlign(tview.AlignLeft)
-	eh.sidePanel.SetBackgroundColor(ui.ColorBg())
+	eh.sidePanel.SetBackgroundColor(theme.Bg())
 
-	// Create panels
-	eh.leftPanel = ui.NewPanel("Events (Tree)")
-	eh.rightPanel = ui.NewPanel("Details")
+	// Create panels with icons (blubber pattern)
+	eh.leftPanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Events (Tree)", theme.IconEvent))
+	eh.rightPanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Details", theme.IconInfo))
 	eh.rightPanel.SetContent(eh.sidePanel)
 
 	// List view selection handlers
@@ -121,17 +120,10 @@ func (eh *EventHistory) setup() {
 	})
 
 	// Timeline view selection handler
-	eh.timelineView.SetOnSelect(func(lane *ui.TimelineLane) {
+	eh.timelineView.SetOnSelect(func(lane *TimelineLane) {
 		if lane != nil && lane.Node != nil {
 			eh.updateSidePanelFromTree(lane.Node)
 		}
-	})
-
-	// Register for theme changes
-	eh.unsubscribeTheme = ui.OnThemeChange(func(_ *config.ParsedTheme) {
-		eh.SetBackgroundColor(ui.ColorBg())
-		eh.sidePanel.SetBackgroundColor(ui.ColorBg())
-		eh.refreshCurrentView()
 	})
 
 	eh.buildLayout()
@@ -143,13 +135,13 @@ func (eh *EventHistory) buildLayout() {
 	// Update panel title and content based on view mode
 	switch eh.viewMode {
 	case ViewModeList:
-		eh.leftPanel.SetTitle("Events (List)")
+		eh.leftPanel.SetTitle(fmt.Sprintf("%s Events (List)", theme.IconEvent))
 		eh.leftPanel.SetContent(eh.table)
 	case ViewModeTree:
-		eh.leftPanel.SetTitle("Events (Tree)")
+		eh.leftPanel.SetTitle(fmt.Sprintf("%s Events (Tree)", theme.IconEvent))
 		eh.leftPanel.SetContent(eh.treeView)
 	case ViewModeTimeline:
-		eh.leftPanel.SetTitle("Events (Timeline)")
+		eh.leftPanel.SetTitle(fmt.Sprintf("%s Events (Timeline)", theme.IconEvent))
 		eh.leftPanel.SetContent(eh.timelineView)
 	}
 
@@ -161,14 +153,14 @@ func (eh *EventHistory) buildLayout() {
 	}
 
 	// Set focus to the active view component
-	if eh.app != nil && eh.app.UI() != nil {
+	if eh.app != nil && eh.app.JigApp() != nil {
 		switch eh.viewMode {
 		case ViewModeList:
-			eh.app.UI().SetFocus(eh.table)
+			eh.app.JigApp().SetFocus(eh.table)
 		case ViewModeTree:
-			eh.app.UI().SetFocus(eh.treeView)
+			eh.app.JigApp().SetFocus(eh.treeView)
 		case ViewModeTimeline:
-			eh.app.UI().SetFocus(eh.timelineView)
+			eh.app.JigApp().SetFocus(eh.timelineView)
 		}
 	}
 }
@@ -203,6 +195,25 @@ func (eh *EventHistory) setLoading(loading bool) {
 	eh.loading = loading
 }
 
+// RefreshTheme updates all component colors after a theme change.
+func (eh *EventHistory) RefreshTheme() {
+	bg := theme.Bg()
+	fg := theme.Fg()
+
+	// Update main container
+	eh.SetBackgroundColor(bg)
+
+	// Update table (list view)
+	eh.table.SetBackgroundColor(bg)
+
+	// Update side panel
+	eh.sidePanel.SetBackgroundColor(bg)
+	eh.sidePanel.SetTextColor(fg)
+
+	// Re-render current view with new theme colors
+	eh.refreshCurrentView()
+}
+
 func (eh *EventHistory) loadData() {
 	provider := eh.app.Provider()
 	if provider == nil {
@@ -218,7 +229,7 @@ func (eh *EventHistory) loadData() {
 		// Load enhanced events for tree/timeline views
 		enhancedEvents, err := provider.GetEnhancedWorkflowHistory(ctx, eh.app.CurrentNamespace(), eh.workflowID, eh.runID)
 
-		eh.app.UI().QueueUpdateDraw(func() {
+		eh.app.JigApp().QueueUpdateDraw(func() {
 			eh.setLoading(false)
 			if err != nil {
 				eh.showError(err)
@@ -296,7 +307,7 @@ func (eh *EventHistory) populateTable() {
 	for _, ev := range eh.events {
 		icon := eventIcon(ev.Type)
 		color := eventColor(ev.Type)
-		eh.table.AddColoredRow(color,
+		eh.table.AddRowWithColor(color,
 			fmt.Sprintf("%d", ev.ID),
 			ev.Time.Format("15:04:05"),
 			icon+" "+ev.Type,
@@ -332,10 +343,10 @@ func (eh *EventHistory) populateTimelineView() {
 func (eh *EventHistory) showError(err error) {
 	eh.table.ClearRows()
 	eh.table.SetHeaders("ID", "TIME", "TYPE", "DETAILS")
-	eh.table.AddColoredRow(ui.ColorFailed(),
+	eh.table.AddRowWithColor(theme.Error(),
 		"",
 		"",
-		ui.IconFailed+" Error loading events",
+		theme.IconError+" Error loading events",
 		err.Error(),
 	)
 }
@@ -369,13 +380,13 @@ func (eh *EventHistory) updateSidePanelFromList(index int) {
 
 [%s::b]Details[-:-:-]
 %s`,
-		ui.TagPanelTitle(),
-		ui.TagFg(), ev.ID,
-		ui.TagPanelTitle(),
+		theme.TagAccent(),
+		theme.TagFg(), ev.ID,
+		theme.TagAccent(),
 		colorTag, icon, ev.Type,
-		ui.TagPanelTitle(),
-		ui.TagFg(), ev.Time.Format("2006-01-02 15:04:05.000"),
-		ui.TagPanelTitle(),
+		theme.TagAccent(),
+		theme.TagFg(), ev.Time.Format("2006-01-02 15:04:05.000"),
+		theme.TagAccent(),
 		formattedDetails,
 	)
 	eh.sidePanel.SetText(text)
@@ -386,8 +397,8 @@ func (eh *EventHistory) updateSidePanelFromTree(node *temporal.EventTreeNode) {
 		return
 	}
 
-	statusTag := ui.StatusColorTag(node.Status)
-	icon := ui.StatusIcon(node.Status)
+	statusTag := theme.StatusColorTag(node.Status)
+	icon := theme.StatusIcon(node.Status)
 
 	var durationStr string
 	if node.Duration > 0 {
@@ -398,7 +409,7 @@ func (eh *EventHistory) updateSidePanelFromTree(node *temporal.EventTreeNode) {
 
 	var attemptsStr string
 	if node.Attempts > 1 {
-		attemptsStr = fmt.Sprintf("\n\n[%s::b]Attempts[-:-:-]\n[%s]%d[-]", ui.TagPanelTitle(), ui.TagFg(), node.Attempts)
+		attemptsStr = fmt.Sprintf("\n\n[%s::b]Attempts[-:-:-]\n[%s]%d[-]", theme.TagAccent(), theme.TagFg(), node.Attempts)
 	}
 
 	// Extract result/failure from events
@@ -406,21 +417,21 @@ func (eh *EventHistory) updateSidePanelFromTree(node *temporal.EventTreeNode) {
 	for _, ev := range node.Events {
 		if ev.Result != "" {
 			formatted := formatSidePanelDetails(ev.Result)
-			dataStr += fmt.Sprintf("\n\n[%s::b]Result[-:-:-]\n%s", ui.TagPanelTitle(), formatted)
+			dataStr += fmt.Sprintf("\n\n[%s::b]Result[-:-:-]\n%s", theme.TagAccent(), formatted)
 		}
 		if ev.Failure != "" {
 			formatted := formatSidePanelDetails(ev.Failure)
-			dataStr += fmt.Sprintf("\n\n[%s::b]Failure[-:-:-]\n[%s]%s[-]", ui.TagPanelTitle(), ui.TagFailed(), formatted)
+			dataStr += fmt.Sprintf("\n\n[%s::b]Failure[-:-:-]\n[%s]%s[-]", theme.TagAccent(), theme.TagError(), formatted)
 		}
 	}
 
 	var eventsStr string
 	if len(node.Events) > 0 {
-		eventsStr = fmt.Sprintf("\n\n[%s::b]Events[-:-:-]", ui.TagPanelTitle())
+		eventsStr = fmt.Sprintf("\n\n[%s::b]Events[-:-:-]", theme.TagAccent())
 		for _, ev := range node.Events {
 			evIcon := eventIcon(ev.Type)
 			eventsStr += fmt.Sprintf("\n[%s]%s %s[-] [%s](%d)[-]",
-				eventColorTag(ev.Type), evIcon, ev.Type, ui.TagFgDim(), ev.ID)
+				eventColorTag(ev.Type), evIcon, ev.Type, theme.TagFgDim(), ev.ID)
 		}
 	}
 
@@ -436,14 +447,14 @@ func (eh *EventHistory) updateSidePanelFromTree(node *temporal.EventTreeNode) {
 
 [%s::b]Start Time[-:-:-]
 [%s]%s[-]%s%s%s`,
-		ui.TagPanelTitle(),
-		ui.TagFg(), node.Name,
-		ui.TagPanelTitle(),
+		theme.TagAccent(),
+		theme.TagFg(), node.Name,
+		theme.TagAccent(),
 		statusTag, icon, node.Status,
-		ui.TagPanelTitle(),
-		ui.TagFg(), durationStr,
-		ui.TagPanelTitle(),
-		ui.TagFg(), node.StartTime.Format("2006-01-02 15:04:05.000"),
+		theme.TagAccent(),
+		theme.TagFg(), durationStr,
+		theme.TagAccent(),
+		theme.TagFg(), node.StartTime.Format("2006-01-02 15:04:05.000"),
 		attemptsStr,
 		dataStr,
 		eventsStr,
@@ -536,20 +547,11 @@ func (eh *EventHistory) Stop() {
 	eh.table.SetInputCapture(nil)
 	eh.treeView.SetInputCapture(nil)
 	eh.timelineView.SetInputCapture(nil)
-	if eh.unsubscribeTheme != nil {
-		eh.unsubscribeTheme()
-	}
-	// Clean up component theme listeners to prevent memory leaks and visual glitches
-	eh.table.Destroy()
-	eh.treeView.Destroy()
-	eh.timelineView.Destroy()
-	eh.leftPanel.Destroy()
-	eh.rightPanel.Destroy()
 }
 
 // Hints returns keybinding hints for this view.
-func (eh *EventHistory) Hints() []ui.KeyHint {
-	hints := []ui.KeyHint{
+func (eh *EventHistory) Hints() []KeyHint {
+	hints := []KeyHint{
 		{Key: "v", Description: "Cycle View"},
 		{Key: "1/2/3", Description: "List/Tree/Timeline"},
 		{Key: "d", Description: "Detail"},
@@ -562,21 +564,21 @@ func (eh *EventHistory) Hints() []ui.KeyHint {
 	switch eh.viewMode {
 	case ViewModeTree:
 		hints = append(hints,
-			ui.KeyHint{Key: "e", Description: "Expand All"},
-			ui.KeyHint{Key: "c", Description: "Collapse All"},
-			ui.KeyHint{Key: "f", Description: "Jump to Failed"},
+			KeyHint{Key: "e", Description: "Expand All"},
+			KeyHint{Key: "c", Description: "Collapse All"},
+			KeyHint{Key: "f", Description: "Jump to Failed"},
 		)
 	case ViewModeTimeline:
 		hints = append(hints,
-			ui.KeyHint{Key: "+/-", Description: "Zoom"},
-			ui.KeyHint{Key: "h/l", Description: "Scroll"},
+			KeyHint{Key: "+/-", Description: "Zoom"},
+			KeyHint{Key: "h/l", Description: "Scroll"},
 		)
 	}
 
 	hints = append(hints,
-		ui.KeyHint{Key: "j/k", Description: "Navigate"},
-		ui.KeyHint{Key: "T", Description: "Theme"},
-		ui.KeyHint{Key: "esc", Description: "Back"},
+		KeyHint{Key: "j/k", Description: "Navigate"},
+		KeyHint{Key: "T", Description: "Theme"},
+		KeyHint{Key: "esc", Description: "Back"},
 	)
 
 	return hints
@@ -598,7 +600,7 @@ func (eh *EventHistory) Focus(delegate func(p tview.Primitive)) {
 
 // Draw applies theme colors dynamically and draws the view.
 func (eh *EventHistory) Draw(screen tcell.Screen) {
-	bg := ui.ColorBg()
+	bg := theme.Bg()
 	eh.SetBackgroundColor(bg)
 	eh.sidePanel.SetBackgroundColor(bg)
 	eh.Flex.Draw(screen)
@@ -608,21 +610,21 @@ func (eh *EventHistory) Draw(screen tcell.Screen) {
 func eventIcon(eventType string) string {
 	switch {
 	case contains(eventType, "Started"):
-		return ui.IconRunning
+		return theme.IconRunning
 	case contains(eventType, "Completed"):
-		return ui.IconCompleted
+		return theme.IconCompleted
 	case contains(eventType, "Failed"):
-		return ui.IconFailed
+		return theme.IconError
 	case contains(eventType, "Scheduled"):
-		return ui.IconPending
+		return theme.IconPending
 	case contains(eventType, "Timer"):
-		return ui.IconTimedOut
+		return theme.IconTimedOut
 	case contains(eventType, "Signal"):
-		return ui.IconActivity
+		return theme.IconActivity
 	case contains(eventType, "Child"):
-		return ui.IconWorkflow
+		return theme.IconWorkflow
 	default:
-		return ui.IconEvent
+		return theme.IconEvent
 	}
 }
 
@@ -630,15 +632,15 @@ func eventIcon(eventType string) string {
 func eventColor(eventType string) tcell.Color {
 	switch {
 	case contains(eventType, "Started"):
-		return ui.ColorRunning()
+		return theme.StatusColor("Running")
 	case contains(eventType, "Completed"):
-		return ui.ColorCompleted()
+		return theme.StatusColor("Completed")
 	case contains(eventType, "Failed"):
-		return ui.ColorFailed()
+		return theme.StatusColor("Failed")
 	case contains(eventType, "Scheduled"):
-		return ui.ColorFgDim()
+		return theme.FgDim()
 	default:
-		return ui.ColorFg()
+		return theme.Fg()
 	}
 }
 
@@ -646,13 +648,13 @@ func eventColor(eventType string) tcell.Color {
 func eventColorTag(eventType string) string {
 	switch {
 	case contains(eventType, "Started"):
-		return ui.TagRunning()
+		return theme.StatusColorTag("Running")
 	case contains(eventType, "Completed"):
-		return ui.TagCompleted()
+		return theme.StatusColorTag("Completed")
 	case contains(eventType, "Failed"):
-		return ui.TagFailed()
+		return theme.StatusColorTag("Failed")
 	default:
-		return ui.TagFg()
+		return theme.TagFg()
 	}
 }
 
@@ -728,9 +730,9 @@ func (eh *EventHistory) yankEventData() {
 		return
 	}
 
-	if err := ui.CopyToClipboard(data); err != nil {
+	if err := copyToClipboard(data); err != nil {
 		eh.sidePanel.SetText(fmt.Sprintf("[%s]%s Failed to copy: %s[-]",
-			ui.TagFailed(), ui.IconFailed, err.Error()))
+			theme.TagError(), theme.IconError, err.Error()))
 		return
 	}
 
@@ -740,14 +742,14 @@ func (eh *EventHistory) yankEventData() {
 [%s]%s[-]
 
 [%s]%s[-]`,
-		ui.TagPanelTitle(),
-		ui.TagAccent(), eventType,
-		ui.TagCompleted(), "Event data copied!"))
+		theme.TagAccent(),
+		theme.TagAccent(), eventType,
+		theme.StatusColorTag("Completed"), "Event data copied!"))
 
 	// Restore preview after a brief delay
 	go func() {
 		time.Sleep(1500 * time.Millisecond)
-		eh.app.UI().QueueUpdateDraw(func() {
+		eh.app.JigApp().QueueUpdateDraw(func() {
 			eh.refreshSidePanel()
 		})
 	}()
@@ -781,43 +783,36 @@ func (eh *EventHistory) showDetailModal() {
 		return
 	}
 
-	// Create scrollable text view for the detail
-	textView := tview.NewTextView()
-	textView.SetDynamicColors(true)
-	textView.SetScrollable(true)
-	textView.SetWordWrap(true)
-	textView.SetBackgroundColor(ui.ColorBg())
-	textView.SetTextColor(ui.ColorFg())
+	// Create modal with event details
+	modal := components.NewModal(components.ModalConfig{
+		Title:  truncateEventType(eventType),
+		Width:  80,
+		Height: 30,
+	})
 
-	// Format with syntax highlighting for JSON
+	// Create scrollable text view for the content
+	textView := tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true).
+		SetWrap(true)
+	textView.SetBackgroundColor(theme.Bg())
+	textView.SetTextColor(theme.Fg())
+
+	// Format the data with syntax highlighting
 	formattedData := formatDetailWithHighlighting(data)
 	textView.SetText(formattedData)
 
-	// Create modal using the base Modal component for consistent styling
-	modal := ui.NewModal(ui.ModalConfig{
-		Title:     "Detail",
-		Width:     80,
-		Height:    20,
-		MinHeight: 10,
-		MaxHeight: 30,
-		Backdrop:  true,
-	})
 	modal.SetContent(textView)
-	modal.SetHints([]ui.KeyHint{
+	modal.SetHints([]components.KeyHint{
 		{Key: "j/k", Description: "Scroll"},
-		{Key: "g/G", Description: "Top/Bottom"},
-		{Key: "y", Description: "Yank"},
-		{Key: "q", Description: "Close"},
+		{Key: "y", Description: "Copy"},
+		{Key: "esc", Description: "Close"},
 	})
-
-	// Update panel title with event type
-	modal.GetPanel().SetTitle(fmt.Sprintf("Detail: %s", truncateEventType(eventType)))
-
-	modal.SetOnClose(func() {
+	modal.SetOnCancel(func() {
 		eh.closeDetailModal()
 	})
 
-	// Input handler for the modal
+	// Handle input
 	textView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyEscape:
@@ -825,47 +820,34 @@ func (eh *EventHistory) showDetailModal() {
 			return nil
 		case tcell.KeyRune:
 			switch event.Rune() {
-			case 'q':
-				eh.closeDetailModal()
-				return nil
-			case 'y':
-				if err := ui.CopyToClipboard(data); err == nil {
-					// Show brief feedback
-					title := fmt.Sprintf("Detail: %s", truncateEventType(eventType))
-					modal.GetPanel().SetTitle("Copied!")
-					modal.GetPanel().SetTitleColor(ui.ColorCompleted())
-					go func() {
-						time.Sleep(1 * time.Second)
-						eh.app.UI().QueueUpdateDraw(func() {
-							modal.GetPanel().SetTitle(title)
-							modal.GetPanel().SetTitleColor(tcell.ColorDefault)
-						})
-					}()
-				}
-				return nil
 			case 'j':
-				row, _ := textView.GetScrollOffset()
-				textView.ScrollTo(row+1, 0)
+				row, col := textView.GetScrollOffset()
+				textView.ScrollTo(row+1, col)
 				return nil
 			case 'k':
-				row, _ := textView.GetScrollOffset()
+				row, col := textView.GetScrollOffset()
 				if row > 0 {
-					textView.ScrollTo(row-1, 0)
+					textView.ScrollTo(row-1, col)
 				}
 				return nil
-			case 'G':
-				textView.ScrollToEnd()
+			case 'y':
+				if err := copyToClipboard(data); err == nil {
+					// Brief feedback
+					originalText := textView.GetText(false)
+					textView.SetText(fmt.Sprintf("[%s]Copied to clipboard![-]\n\n%s",
+						theme.StatusColorTag("Completed"), originalText))
+				}
 				return nil
-			case 'g':
-				textView.ScrollTo(0, 0)
+			case 'q':
+				eh.closeDetailModal()
 				return nil
 			}
 		}
 		return event
 	})
 
-	eh.app.UI().Pages().AddPage("event-detail", modal, true, true)
-	eh.app.UI().SetFocus(textView)
+	eh.app.JigApp().Pages().AddPage("event-detail", modal, true, true)
+	eh.app.JigApp().SetFocus(textView)
 }
 
 // truncateEventType shortens long event type names for the title.
@@ -879,7 +861,7 @@ func truncateEventType(eventType string) string {
 // formatSidePanelDetails formats event details with pretty-printed JSON and syntax highlighting.
 func formatSidePanelDetails(details string) string {
 	if details == "" {
-		return fmt.Sprintf("[%s]No details[-]", ui.TagFgDim())
+		return fmt.Sprintf("[%s]No details[-]", theme.TagFgDim())
 	}
 
 	// First try to pretty print if it's pure JSON
@@ -916,7 +898,7 @@ func formatKeyValueDetails(details string) string {
 			value := strings.TrimSpace(part[colonIdx+1:])
 
 			// Write the key in accent color
-			result.WriteString(fmt.Sprintf("[%s]%s:[-] ", ui.TagAccent(), key))
+			result.WriteString(fmt.Sprintf("[%s]%s:[-] ", theme.TagAccent(), key))
 
 			// Check if value is JSON
 			if strings.HasPrefix(value, "{") || strings.HasPrefix(value, "[") {
@@ -1000,7 +982,7 @@ func highlightJSONValueLine(line string) string {
 		trimmed := strings.TrimSpace(prefix)
 		if strings.HasPrefix(trimmed, "\"") && strings.HasSuffix(trimmed, "\"") {
 			// JSON key with quotes - use accent color
-			return fmt.Sprintf("[%s]%s[-]:[%s]%s[-]", ui.TagAccent(), prefix, ui.TagFg(), highlightValues(suffix))
+			return fmt.Sprintf("[%s]%s[-]:[%s]%s[-]", theme.TagAccent(), prefix, theme.TagFg(), highlightValues(suffix))
 		}
 	}
 
@@ -1010,24 +992,19 @@ func highlightJSONValueLine(line string) string {
 // highlightValues highlights JSON values (booleans, null, numbers).
 func highlightValues(s string) string {
 	result := s
-	result = strings.ReplaceAll(result, "true", fmt.Sprintf("[%s]true[-]", ui.TagCompleted()))
-	result = strings.ReplaceAll(result, "false", fmt.Sprintf("[%s]false[-]", ui.TagFailed()))
-	result = strings.ReplaceAll(result, "null", fmt.Sprintf("[%s]null[-]", ui.TagFgDim()))
+	result = strings.ReplaceAll(result, "true", fmt.Sprintf("[%s]true[-]", theme.StatusColorTag("Completed")))
+	result = strings.ReplaceAll(result, "false", fmt.Sprintf("[%s]false[-]", theme.StatusColorTag("Failed")))
+	result = strings.ReplaceAll(result, "null", fmt.Sprintf("[%s]null[-]", theme.TagFgDim()))
 	return result
 }
 
 // closeDetailModal closes the detail modal.
 func (eh *EventHistory) closeDetailModal() {
-	eh.app.UI().Pages().RemovePage("event-detail")
-	// Restore focus to current view
-	switch eh.viewMode {
-	case ViewModeList:
-		eh.app.UI().SetFocus(eh.table)
-	case ViewModeTree:
-		eh.app.UI().SetFocus(eh.treeView)
-	case ViewModeTimeline:
-		eh.app.UI().SetFocus(eh.timelineView)
-	}
+	eh.app.JigApp().Pages().RemovePage("event-detail")
+	// Restore focus to current view through the view's Focus method
+	eh.Focus(func(p tview.Primitive) {
+		eh.app.JigApp().SetFocus(p)
+	})
 }
 
 // prettyPrintJSON attempts to format a string as pretty JSON.
@@ -1086,10 +1063,10 @@ func highlightJSONLine(line string) string {
 		trimmed := strings.TrimSpace(prefix)
 		if strings.HasPrefix(trimmed, "\"") || strings.HasPrefix(trimmed, "'") {
 			// JSON key with quotes
-			return fmt.Sprintf("[%s]%s[-]%s", ui.TagAccent(), prefix, highlightJSONValue(suffix))
+			return fmt.Sprintf("[%s]%s[-]%s", theme.TagAccent(), prefix, highlightJSONValue(suffix))
 		} else if !strings.Contains(trimmed, " ") && len(trimmed) > 0 {
 			// Simple key without quotes (like "Details:", "Result:")
-			return fmt.Sprintf("[%s::b]%s[-:-:-]%s", ui.TagAccent(), prefix, highlightJSONValue(suffix))
+			return fmt.Sprintf("[%s::b]%s[-:-:-]%s", theme.TagAccent(), prefix, highlightJSONValue(suffix))
 		}
 	}
 
@@ -1105,9 +1082,9 @@ func highlightJSONValue(s string) string {
 	// This is a basic implementation - a full JSON parser would be more robust
 
 	// Highlight booleans and null
-	result = strings.ReplaceAll(result, "true", fmt.Sprintf("[%s]true[-]", ui.TagCompleted()))
-	result = strings.ReplaceAll(result, "false", fmt.Sprintf("[%s]false[-]", ui.TagFailed()))
-	result = strings.ReplaceAll(result, "null", fmt.Sprintf("[%s]null[-]", ui.TagFgDim()))
+	result = strings.ReplaceAll(result, "true", fmt.Sprintf("[%s]true[-]", theme.StatusColorTag("Completed")))
+	result = strings.ReplaceAll(result, "false", fmt.Sprintf("[%s]false[-]", theme.StatusColorTag("Failed")))
+	result = strings.ReplaceAll(result, "null", fmt.Sprintf("[%s]null[-]", theme.TagFgDim()))
 
 	return result
 }

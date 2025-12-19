@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/atterpac/loom/internal/config"
-	"github.com/atterpac/loom/internal/temporal"
-	"github.com/atterpac/loom/internal/ui"
+	"github.com/atterpac/jig/components"
+	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/tempo/internal/temporal"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -17,16 +17,15 @@ import (
 // NamespaceDetail displays detailed information about a namespace.
 type NamespaceDetail struct {
 	*tview.Flex
-	app              *App
-	namespace        string
-	detail           *temporal.NamespaceDetail
-	loading          bool
-	unsubscribeTheme func()
+	app       *App
+	namespace string
+	detail    *temporal.NamespaceDetail
+	loading   bool
 
 	// UI components
-	infoPanel     *ui.Panel
-	archivalPanel *ui.Panel
-	clusterPanel  *ui.Panel
+	infoPanel     *components.Panel
+	archivalPanel *components.Panel
+	clusterPanel  *components.Panel
 	infoView      *tview.TextView
 	archivalView  *tview.TextView
 	clusterView   *tview.TextView
@@ -44,44 +43,44 @@ func NewNamespaceDetail(app *App, namespace string) *NamespaceDetail {
 }
 
 func (nd *NamespaceDetail) setup() {
-	nd.SetBackgroundColor(ui.ColorBg())
+	nd.SetBackgroundColor(theme.Bg())
 
 	// Info view
 	nd.infoView = tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignLeft)
-	nd.infoView.SetBackgroundColor(ui.ColorBg())
+	nd.infoView.SetBackgroundColor(theme.Bg())
 
 	// Archival view
 	nd.archivalView = tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignLeft)
-	nd.archivalView.SetBackgroundColor(ui.ColorBg())
+	nd.archivalView.SetBackgroundColor(theme.Bg())
 
 	// Cluster view
 	nd.clusterView = tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignLeft)
-	nd.clusterView.SetBackgroundColor(ui.ColorBg())
+	nd.clusterView.SetBackgroundColor(theme.Bg())
 
-	// Create panels
-	nd.infoPanel = ui.NewPanel("Namespace Info")
+	// Create panels with icons (blubber pattern)
+	nd.infoPanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Namespace Info", theme.IconNamespace))
 	nd.infoPanel.SetContent(nd.infoView)
 
-	nd.archivalPanel = ui.NewPanel("Archival Configuration")
+	nd.archivalPanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Archival Configuration", theme.IconDatabase))
 	nd.archivalPanel.SetContent(nd.archivalView)
 
-	nd.clusterPanel = ui.NewPanel("Cluster & Replication")
+	nd.clusterPanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Cluster & Replication", theme.IconServer))
 	nd.clusterPanel.SetContent(nd.clusterView)
 
 	// Left side: Info panel
 	leftFlex := tview.NewFlex().SetDirection(tview.FlexRow)
-	leftFlex.SetBackgroundColor(ui.ColorBg())
+	leftFlex.SetBackgroundColor(theme.Bg())
 	leftFlex.AddItem(nd.infoPanel, 0, 2, false)
 
 	// Right side: Archival + Cluster stacked
 	rightFlex := tview.NewFlex().SetDirection(tview.FlexRow)
-	rightFlex.SetBackgroundColor(ui.ColorBg())
+	rightFlex.SetBackgroundColor(theme.Bg())
 	rightFlex.AddItem(nd.archivalPanel, 0, 1, false)
 	rightFlex.AddItem(nd.clusterPanel, 0, 1, false)
 
@@ -90,21 +89,7 @@ func (nd *NamespaceDetail) setup() {
 	nd.AddItem(rightFlex, 0, 1, false)
 
 	// Show loading state initially
-	nd.infoView.SetText(fmt.Sprintf("\n [%s]Loading...[-]", ui.TagFgDim()))
-
-	// Register for theme changes
-	nd.unsubscribeTheme = ui.OnThemeChange(func(_ *config.ParsedTheme) {
-		nd.SetBackgroundColor(ui.ColorBg())
-		leftFlex.SetBackgroundColor(ui.ColorBg())
-		rightFlex.SetBackgroundColor(ui.ColorBg())
-		nd.infoView.SetBackgroundColor(ui.ColorBg())
-		nd.archivalView.SetBackgroundColor(ui.ColorBg())
-		nd.clusterView.SetBackgroundColor(ui.ColorBg())
-		// Re-render with new colors
-		if nd.detail != nil {
-			nd.render()
-		}
-	})
+	nd.infoView.SetText(fmt.Sprintf("\n [%s]Loading...[-]", theme.TagFgDim()))
 }
 
 func (nd *NamespaceDetail) loadData() {
@@ -121,7 +106,7 @@ func (nd *NamespaceDetail) loadData() {
 
 		detail, err := provider.DescribeNamespace(ctx, nd.namespace)
 
-		nd.app.UI().QueueUpdateDraw(func() {
+		nd.app.JigApp().QueueUpdateDraw(func() {
 			nd.loading = false
 			if err != nil {
 				nd.showError(err)
@@ -153,14 +138,30 @@ func (nd *NamespaceDetail) loadMockData() {
 }
 
 func (nd *NamespaceDetail) showError(err error) {
-	nd.infoView.SetText(fmt.Sprintf("\n [%s]Error: %s[-]", ui.TagFailed(), err.Error()))
+	nd.infoView.SetText(fmt.Sprintf("\n [%s]Error: %s[-]", theme.TagError(), err.Error()))
 	nd.archivalView.SetText("")
 	nd.clusterView.SetText("")
 }
 
+// RefreshTheme updates all component colors after a theme change.
+func (nd *NamespaceDetail) RefreshTheme() {
+	bg := theme.Bg()
+
+	// Update main container
+	nd.SetBackgroundColor(bg)
+
+	// Update text views
+	nd.infoView.SetBackgroundColor(bg)
+	nd.archivalView.SetBackgroundColor(bg)
+	nd.clusterView.SetBackgroundColor(bg)
+
+	// Re-render content with new theme colors
+	nd.render()
+}
+
 func (nd *NamespaceDetail) render() {
 	if nd.detail == nil {
-		nd.infoView.SetText(fmt.Sprintf(" [%s]Namespace not found[-]", ui.TagFailed()))
+		nd.infoView.SetText(fmt.Sprintf(" [%s]Namespace not found[-]", theme.TagError()))
 		return
 	}
 
@@ -176,12 +177,12 @@ func (nd *NamespaceDetail) render() {
 [%s::b]Description[-:-:-]    [%s]%s[-]
 [%s::b]Owner Email[-:-:-]    [%s]%s[-]
 [%s::b]Namespace ID[-:-:-]   [%s]%s[-]`,
-		ui.TagFgDim(), ui.TagFg(), d.Name,
-		ui.TagFgDim(), stateColor, stateIcon, d.State,
-		ui.TagFgDim(), ui.TagFg(), d.RetentionPeriod,
-		ui.TagFgDim(), ui.TagFg(), nd.valueOrNA(d.Description),
-		ui.TagFgDim(), ui.TagFg(), nd.valueOrNA(d.OwnerEmail),
-		ui.TagFgDim(), ui.TagFgDim(), nd.valueOrNA(d.ID),
+		theme.TagFgDim(), theme.TagFg(), d.Name,
+		theme.TagFgDim(), stateColor, stateIcon, d.State,
+		theme.TagFgDim(), theme.TagFg(), d.RetentionPeriod,
+		theme.TagFgDim(), theme.TagFg(), nd.valueOrNA(d.Description),
+		theme.TagFgDim(), theme.TagFg(), nd.valueOrNA(d.OwnerEmail),
+		theme.TagFgDim(), theme.TagFgDim(), nd.valueOrNA(d.ID),
 	)
 	nd.infoView.SetText(infoText)
 
@@ -192,8 +193,8 @@ func (nd *NamespaceDetail) render() {
 
 [%s::b]Visibility Archival[-:-:-]
   [%s]%s[-]`,
-		ui.TagFgDim(), ui.TagFg(), nd.valueOrNA(d.HistoryArchival),
-		ui.TagFgDim(), ui.TagFg(), nd.valueOrNA(d.VisibilityArchival),
+		theme.TagFgDim(), theme.TagFg(), nd.valueOrNA(d.HistoryArchival),
+		theme.TagFgDim(), theme.TagFg(), nd.valueOrNA(d.VisibilityArchival),
 	)
 	nd.archivalView.SetText(archivalText)
 
@@ -212,9 +213,9 @@ func (nd *NamespaceDetail) render() {
 [%s::b]Global Namespace[-:-:-]  [%s]%s[-]
 [%s::b]Failover Version[-:-:-]  [%s]%d[-]
 [%s::b]Clusters[-:-:-]          [%s]%s[-]`,
-		ui.TagFgDim(), ui.TagFg(), globalStr,
-		ui.TagFgDim(), ui.TagFg(), d.FailoverVersion,
-		ui.TagFgDim(), ui.TagFg(), clustersStr,
+		theme.TagFgDim(), theme.TagFg(), globalStr,
+		theme.TagFgDim(), theme.TagFg(), d.FailoverVersion,
+		theme.TagFgDim(), theme.TagFg(), clustersStr,
 	)
 	nd.clusterView.SetText(clusterText)
 }
@@ -229,13 +230,13 @@ func (nd *NamespaceDetail) valueOrNA(s string) string {
 func (nd *NamespaceDetail) stateColorTag(state string) string {
 	switch state {
 	case "Active":
-		return ui.TagRunning()
+		return theme.StatusColorTag("Running")
 	case "Deprecated":
-		return ui.TagFailed()
+		return theme.StatusColorTag("Failed")
 	case "Deleted":
-		return ui.TagFgDim()
+		return theme.TagFgDim()
 	default:
-		return ui.TagFg()
+		return theme.TagFg()
 	}
 }
 
@@ -279,30 +280,23 @@ func (nd *NamespaceDetail) Start() {
 // Stop is called when the view is deactivated.
 func (nd *NamespaceDetail) Stop() {
 	nd.SetInputCapture(nil)
-	if nd.unsubscribeTheme != nil {
-		nd.unsubscribeTheme()
-	}
-	// Clean up component theme listeners to prevent memory leaks and visual glitches
-	nd.infoPanel.Destroy()
-	nd.archivalPanel.Destroy()
-	nd.clusterPanel.Destroy()
 }
 
 // Hints returns keybinding hints for this view.
-func (nd *NamespaceDetail) Hints() []ui.KeyHint {
-	hints := []ui.KeyHint{
+func (nd *NamespaceDetail) Hints() []KeyHint {
+	hints := []KeyHint{
 		{Key: "r", Description: "Refresh"},
 		{Key: "e", Description: "Edit"},
 	}
 
 	// Only show deprecate for active namespaces
 	if nd.detail != nil && nd.detail.State == "Active" {
-		hints = append(hints, ui.KeyHint{Key: "D", Description: "Deprecate"})
+		hints = append(hints, KeyHint{Key: "D", Description: "Deprecate"})
 	}
 
 	hints = append(hints,
-		ui.KeyHint{Key: "T", Description: "Theme"},
-		ui.KeyHint{Key: "esc", Description: "Back"},
+		KeyHint{Key: "T", Description: "Theme"},
+		KeyHint{Key: "esc", Description: "Back"},
 	)
 
 	return hints
@@ -315,7 +309,7 @@ func (nd *NamespaceDetail) Focus(delegate func(p tview.Primitive)) {
 
 // Draw applies theme colors dynamically and draws the view.
 func (nd *NamespaceDetail) Draw(screen tcell.Screen) {
-	bg := ui.ColorBg()
+	bg := theme.Bg()
 	nd.SetBackgroundColor(bg)
 	nd.infoView.SetBackgroundColor(bg)
 	nd.archivalView.SetBackgroundColor(bg)
@@ -323,65 +317,131 @@ func (nd *NamespaceDetail) Draw(screen tcell.Screen) {
 	nd.Flex.Draw(screen)
 }
 
-// Edit functionality
+// Edit functionality - implemented using jig components
 
 func (nd *NamespaceDetail) showEditForm() {
 	if nd.detail == nil {
 		return
 	}
 
-	// Parse retention days from string
-	retentionDays := 30 // default
-	if nd.detail.RetentionPeriod != "" && nd.detail.RetentionPeriod != "N/A" {
-		parts := strings.Fields(nd.detail.RetentionPeriod)
-		if len(parts) > 0 {
-			if days, err := strconv.Atoi(parts[0]); err == nil {
-				retentionDays = days
-			}
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Edit Namespace", theme.IconNamespace),
+		Width:    70,
+		Height:   18,
+		Backdrop: true,
+	})
+
+	// Parse current retention period (e.g., "72h0m0s" -> 3)
+	currentRetention := 3
+	if nd.detail.RetentionPeriod != "" {
+		if dur, err := time.ParseDuration(nd.detail.RetentionPeriod); err == nil {
+			currentRetention = int(dur.Hours() / 24)
 		}
 	}
 
-	form := ui.NewNamespaceForm()
-	form.SetNamespace(nd.detail.Name, retentionDays, nd.detail.Description, nd.detail.OwnerEmail)
+	form := components.NewForm()
+	form.AddTextField("description", "Description", nd.detail.Description)
+	form.AddTextField("ownerEmail", "Owner Email", nd.detail.OwnerEmail)
+	form.AddTextField("retention", "Retention (days)", strconv.Itoa(currentRetention))
 
-	form.SetOnSubmit(func(data ui.NamespaceFormData) {
-		nd.closeModal("namespace-form")
-		nd.showUpdateConfirm(data)
-	}).SetOnCancel(func() {
-		nd.closeModal("namespace-form")
+	form.SetOnSubmit(func(values map[string]any) {
+		retentionStr := values["retention"].(string)
+		retentionDays, err := strconv.Atoi(retentionStr)
+		if err != nil || retentionDays < 1 {
+			return // Invalid retention
+		}
+
+		updateReq := temporal.NamespaceUpdateRequest{
+			Name:          nd.namespace,
+			Description:   values["description"].(string),
+			OwnerEmail:    values["ownerEmail"].(string),
+			RetentionDays: retentionDays,
+		}
+		nd.closeModal("edit-form")
+		nd.showUpdateConfirm(updateReq)
+	})
+	form.SetOnCancel(func() {
+		nd.closeModal("edit-form")
 	})
 
-	nd.app.UI().Pages().AddPage("namespace-form", form, true, true)
-	nd.app.UI().SetFocus(form)
-}
+	modal.SetContent(form)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Tab", Description: "Next field"},
+		{Key: "Enter", Description: "Save"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		values := form.GetValues()
+		retentionStr := values["retention"].(string)
+		retentionDays, err := strconv.Atoi(retentionStr)
+		if err != nil || retentionDays < 1 {
+			return
+		}
 
-func (nd *NamespaceDetail) showUpdateConfirm(data ui.NamespaceFormData) {
-	command := fmt.Sprintf(`temporal namespace update \
-  --namespace %s \
-  --retention %dd \
-  --description "%s" \
-  --owner-email "%s"`,
-		data.Name, data.RetentionDays, data.Description, data.OwnerEmail)
-
-	modal := ui.NewConfirmModal(
-		"Update Namespace",
-		fmt.Sprintf("Update namespace %s?", data.Name),
-		command,
-	).SetOnConfirm(func() {
-		nd.executeUpdate(data)
-	}).SetOnCancel(func() {
-		nd.closeModal("confirm-update")
+		updateReq := temporal.NamespaceUpdateRequest{
+			Name:          nd.namespace,
+			Description:   values["description"].(string),
+			OwnerEmail:    values["ownerEmail"].(string),
+			RetentionDays: retentionDays,
+		}
+		nd.closeModal("edit-form")
+		nd.showUpdateConfirm(updateReq)
+	})
+	modal.SetOnCancel(func() {
+		nd.closeModal("edit-form")
 	})
 
-	nd.app.UI().Pages().AddPage("confirm-update", modal, true, true)
-	nd.app.UI().SetFocus(modal)
+	nd.app.JigApp().Pages().AddPage("edit-form", modal, true, true)
+	nd.app.JigApp().SetFocus(form)
 }
 
-func (nd *NamespaceDetail) executeUpdate(data ui.NamespaceFormData) {
+func (nd *NamespaceDetail) showUpdateConfirm(req temporal.NamespaceUpdateRequest) {
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Confirm Update", theme.IconWarning),
+		Width:    65,
+		Height:   14,
+		Backdrop: true,
+	})
+
+	// Show what will be updated
+	contentFlex := tview.NewFlex().SetDirection(tview.FlexRow)
+	contentFlex.SetBackgroundColor(theme.Bg())
+
+	changesText := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft)
+	changesText.SetBackgroundColor(theme.Bg())
+	changesText.SetText(fmt.Sprintf(`[%s]Update namespace:[-] [%s]%s[-]
+
+[%s]Description:[-]   [%s]%s[-]
+[%s]Owner Email:[-]   [%s]%s[-]
+[%s]Retention:[-]     [%s]%d days[-]`,
+		theme.TagAccent(), theme.TagFg(), req.Name,
+		theme.TagFgDim(), theme.TagFg(), req.Description,
+		theme.TagFgDim(), theme.TagFg(), req.OwnerEmail,
+		theme.TagFgDim(), theme.TagFg(), req.RetentionDays))
+
+	contentFlex.AddItem(changesText, 0, 1, true)
+
+	modal.SetContent(contentFlex)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter", Description: "Update"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		nd.closeModal("update-confirm")
+		nd.executeUpdate(req)
+	})
+	modal.SetOnCancel(func() {
+		nd.closeModal("update-confirm")
+	})
+
+	nd.app.JigApp().Pages().AddPage("update-confirm", modal, true, true)
+}
+
+func (nd *NamespaceDetail) executeUpdate(req temporal.NamespaceUpdateRequest) {
 	provider := nd.app.Provider()
 	if provider == nil {
-		nd.closeModal("confirm-update")
-		nd.showError(fmt.Errorf("no provider connected"))
 		return
 	}
 
@@ -389,58 +449,89 @@ func (nd *NamespaceDetail) executeUpdate(data ui.NamespaceFormData) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		req := temporal.NamespaceUpdateRequest{
-			Name:          data.Name,
-			Description:   data.Description,
-			OwnerEmail:    data.OwnerEmail,
-			RetentionDays: data.RetentionDays,
-		}
-
 		err := provider.UpdateNamespace(ctx, req)
 
-		nd.app.UI().QueueUpdateDraw(func() {
-			nd.closeModal("confirm-update")
+		nd.app.JigApp().QueueUpdateDraw(func() {
 			if err != nil {
 				nd.showError(err)
-			} else {
-				nd.loadData() // Refresh to show updated values
+				return
 			}
+			nd.loadData() // Refresh to show updated values
 		})
 	}()
 }
 
-// Deprecate functionality
-
 func (nd *NamespaceDetail) showDeprecateConfirm() {
-	if nd.detail == nil || nd.detail.State != "Active" {
+	if nd.detail == nil {
 		return
 	}
 
-	command := fmt.Sprintf(`temporal namespace update \
-  --namespace %s \
-  --state DEPRECATED`,
-		nd.namespace)
-
-	modal := ui.NewConfirmModal(
-		"Deprecate Namespace",
-		fmt.Sprintf("Deprecate namespace %s?", nd.namespace),
-		command,
-	).SetWarning("Deprecated namespaces prevent new workflow executions. Existing workflows will continue. This can be reversed by updating the namespace state.").
-		SetOnConfirm(func() {
-			nd.executeDeprecate()
-		}).SetOnCancel(func() {
-		nd.closeModal("confirm-deprecate")
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Deprecate Namespace", theme.IconError),
+		Width:    70,
+		Height:   16,
+		Backdrop: true,
 	})
 
-	nd.app.UI().Pages().AddPage("confirm-deprecate", modal, true, true)
-	nd.app.UI().SetFocus(modal)
+	contentFlex := tview.NewFlex().SetDirection(tview.FlexRow)
+	contentFlex.SetBackgroundColor(theme.Bg())
+
+	warningText := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft)
+	warningText.SetBackgroundColor(theme.Bg())
+	warningText.SetText(fmt.Sprintf(`[%s]Warning: Deprecating a namespace has the following effects:[-]
+
+• New workflows cannot be started in this namespace
+• Existing workflows will continue to run normally
+• This action may be difficult to reverse
+
+[%s]Namespace:[-] [%s]%s[-]`,
+		theme.TagError(),
+		theme.TagFgDim(), theme.TagFg(), nd.namespace))
+
+	form := components.NewForm()
+	form.AddTextField("confirm", "Type namespace name to confirm", "")
+	form.SetOnSubmit(func(values map[string]any) {
+		confirm := values["confirm"].(string)
+		if confirm != nd.namespace {
+			return // Must match namespace name
+		}
+		nd.closeModal("deprecate-confirm")
+		nd.executeDeprecate()
+	})
+	form.SetOnCancel(func() {
+		nd.closeModal("deprecate-confirm")
+	})
+
+	contentFlex.AddItem(warningText, 8, 0, false)
+	contentFlex.AddItem(form, 0, 1, true)
+
+	modal.SetContent(contentFlex)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter", Description: "Deprecate"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		values := form.GetValues()
+		confirm := values["confirm"].(string)
+		if confirm != nd.namespace {
+			return
+		}
+		nd.closeModal("deprecate-confirm")
+		nd.executeDeprecate()
+	})
+	modal.SetOnCancel(func() {
+		nd.closeModal("deprecate-confirm")
+	})
+
+	nd.app.JigApp().Pages().AddPage("deprecate-confirm", modal, true, true)
+	nd.app.JigApp().SetFocus(form)
 }
 
 func (nd *NamespaceDetail) executeDeprecate() {
 	provider := nd.app.Provider()
 	if provider == nil {
-		nd.closeModal("confirm-deprecate")
-		nd.showError(fmt.Errorf("no provider connected"))
 		return
 	}
 
@@ -450,23 +541,20 @@ func (nd *NamespaceDetail) executeDeprecate() {
 
 		err := provider.DeprecateNamespace(ctx, nd.namespace)
 
-		nd.app.UI().QueueUpdateDraw(func() {
-			nd.closeModal("confirm-deprecate")
+		nd.app.JigApp().QueueUpdateDraw(func() {
 			if err != nil {
 				nd.showError(err)
-			} else {
-				nd.loadData() // Refresh to show deprecated state
-				// Update hints since state changed
-				nd.app.UI().Menu().SetHints(nd.Hints())
+				return
 			}
+			nd.loadData() // Refresh to show updated state
 		})
 	}()
 }
 
 func (nd *NamespaceDetail) closeModal(name string) {
-	nd.app.UI().Pages().RemovePage(name)
+	nd.app.JigApp().Pages().RemovePage(name)
 	// Restore focus to current view
-	if current := nd.app.UI().Pages().Current(); current != nil {
-		nd.app.UI().SetFocus(current)
+	if current := nd.app.JigApp().Pages().Current(); current != nil {
+		nd.app.JigApp().SetFocus(current)
 	}
 }

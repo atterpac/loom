@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/atterpac/loom/internal/config"
-	"github.com/atterpac/loom/internal/temporal"
-	"github.com/atterpac/loom/internal/ui"
+	"github.com/atterpac/jig/components"
+	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/tempo/internal/temporal"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -23,17 +23,16 @@ type taskQueueEntry struct {
 // TaskQueueView displays task queue information.
 type TaskQueueView struct {
 	*tview.Flex
-	app              *App
-	queueTable       *ui.Table
-	pollerTable      *ui.Table
-	queuePanel       *ui.Panel
-	pollerPanel      *ui.Panel
-	queues           []taskQueueEntry
-	pollers          []temporal.Poller
-	selectedQueue    string
-	loading          bool
-	suppressSelect   bool // Prevent recursive selection handling
-	unsubscribeTheme func()
+	app            *App
+	queueTable     *components.Table
+	pollerTable    *components.Table
+	queuePanel     *components.Panel
+	pollerPanel    *components.Panel
+	queues         []taskQueueEntry
+	pollers        []temporal.Poller
+	selectedQueue  string
+	loading        bool
+	suppressSelect bool // Prevent recursive selection handling
 }
 
 // NewTaskQueueView creates a new task queue view.
@@ -41,8 +40,8 @@ func NewTaskQueueView(app *App) *TaskQueueView {
 	tq := &TaskQueueView{
 		Flex:        tview.NewFlex().SetDirection(tview.FlexColumn),
 		app:         app,
-		queueTable:  ui.NewTable(),
-		pollerTable: ui.NewTable(),
+		queueTable:  components.NewTable(),
+		pollerTable: components.NewTable(),
 		queues:      []taskQueueEntry{},
 		pollers:     []temporal.Poller{},
 	}
@@ -51,23 +50,23 @@ func NewTaskQueueView(app *App) *TaskQueueView {
 }
 
 func (tq *TaskQueueView) setup() {
-	tq.SetBackgroundColor(ui.ColorBg())
+	tq.SetBackgroundColor(theme.Bg())
 
 	// Task queues table
 	tq.queueTable.SetHeaders("NAME", "TYPE", "POLLERS", "BACKLOG")
 	tq.queueTable.SetBorder(false)
-	tq.queueTable.SetBackgroundColor(ui.ColorBg())
+	tq.queueTable.SetBackgroundColor(theme.Bg())
 
 	// Pollers table
 	tq.pollerTable.SetHeaders("IDENTITY", "TYPE", "LAST ACCESS")
 	tq.pollerTable.SetBorder(false)
-	tq.pollerTable.SetBackgroundColor(ui.ColorBg())
+	tq.pollerTable.SetBackgroundColor(theme.Bg())
 
-	// Create panels
-	tq.queuePanel = ui.NewPanel("Task Queues")
+	// Create panels with icons (blubber pattern)
+	tq.queuePanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Task Queues", theme.IconTaskQueue))
 	tq.queuePanel.SetContent(tq.queueTable)
 
-	tq.pollerPanel = ui.NewPanel("Pollers")
+	tq.pollerPanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Pollers", theme.IconActivity))
 	tq.pollerPanel.SetContent(tq.pollerTable)
 
 	// Update pollers when queue selection changes
@@ -81,18 +80,6 @@ func (tq *TaskQueueView) setup() {
 		}
 	})
 
-	// Register for theme changes
-	tq.unsubscribeTheme = ui.OnThemeChange(func(_ *config.ParsedTheme) {
-		tq.SetBackgroundColor(ui.ColorBg())
-		// Re-render tables with new colors
-		if len(tq.queues) > 0 {
-			tq.populateQueueTable()
-		}
-		if len(tq.pollers) > 0 {
-			tq.populatePollerTable("")
-		}
-	})
-
 	// Two-column layout
 	tq.AddItem(tq.queuePanel, 0, 1, true)
 	tq.AddItem(tq.pollerPanel, 0, 1, false)
@@ -100,6 +87,24 @@ func (tq *TaskQueueView) setup() {
 
 func (tq *TaskQueueView) setLoading(loading bool) {
 	tq.loading = loading
+}
+
+// RefreshTheme updates all component colors after a theme change.
+func (tq *TaskQueueView) RefreshTheme() {
+	bg := theme.Bg()
+
+	// Update main container
+	tq.SetBackgroundColor(bg)
+
+	// Update tables
+	tq.queueTable.SetBackgroundColor(bg)
+	tq.pollerTable.SetBackgroundColor(bg)
+
+	// Re-render tables with new theme colors
+	tq.populateQueueTable()
+	if len(tq.queues) > 0 && tq.queueTable.SelectedRow() >= 0 {
+		tq.populatePollerTable(tq.queues[tq.queueTable.SelectedRow()].Type)
+	}
 }
 
 func (tq *TaskQueueView) loadData() {
@@ -118,7 +123,7 @@ func (tq *TaskQueueView) loadData() {
 		// List workflows to discover task queues
 		workflows, _, err := provider.ListWorkflows(ctx, tq.app.CurrentNamespace(), temporal.ListOptions{PageSize: 100})
 
-		tq.app.UI().QueueUpdateDraw(func() {
+		tq.app.JigApp().QueueUpdateDraw(func() {
 			tq.setLoading(false)
 			if err != nil {
 				tq.showQueueError(err)
@@ -155,9 +160,6 @@ func (tq *TaskQueueView) loadData() {
 
 			tq.populateQueueTable()
 
-			// Update stats bar with queue count
-			tq.app.UI().StatsBar().SetTaskQueueCount(len(tq.queues))
-
 			// Load details for first queue
 			if len(tq.queues) > 0 && tq.queues[0].Name != "(no task queues found)" {
 				tq.loadPollers(0)
@@ -169,7 +171,7 @@ func (tq *TaskQueueView) loadData() {
 func (tq *TaskQueueView) showQueueError(err error) {
 	tq.queueTable.ClearRows()
 	tq.queueTable.SetHeaders("NAME", "TYPE", "POLLERS", "BACKLOG")
-	tq.queueTable.AddColoredRow(ui.ColorFailed(),
+	tq.queueTable.AddRowWithColor(theme.Error(),
 		"Error loading task queues",
 		err.Error(),
 		"",
@@ -185,7 +187,6 @@ func (tq *TaskQueueView) loadMockQueues() {
 		{Name: "notification-tasks", Type: "Combined", PollerCount: 2, Backlog: 0},
 	}
 	tq.populateQueueTable()
-	tq.app.UI().StatsBar().SetTaskQueueCount(len(tq.queues))
 }
 
 func (tq *TaskQueueView) populateQueueTable() {
@@ -196,29 +197,31 @@ func (tq *TaskQueueView) populateQueueTable() {
 	tq.queueTable.SetHeaders("NAME", "TYPE", "POLLERS", "BACKLOG")
 
 	for _, q := range tq.queues {
-		backlogIcon := ui.IconCompleted
-		backlogColor := ui.ColorCompleted()
+		backlogIcon := theme.IconCompleted
+		backlogColor := theme.StatusColor("Completed")
 		if q.Backlog > 50 {
-			backlogIcon = ui.IconFailed
-			backlogColor = ui.ColorFailed()
+			backlogIcon = theme.IconError
+			backlogColor = theme.StatusColor("Failed")
 		} else if q.Backlog > 10 {
-			backlogIcon = ui.IconRunning
-			backlogColor = ui.ColorRunning()
+			backlogIcon = theme.IconRunning
+			backlogColor = theme.StatusColor("Running")
 		}
 
-		typeIcon := ui.IconWorkflow
+		typeIcon := theme.IconWorkflow
 		if q.Type == "Activity" {
-			typeIcon = ui.IconActivity
+			typeIcon = theme.IconActivity
 		}
 
-		row := tq.queueTable.AddRow(
-			ui.IconTaskQueue+" "+q.Name,
+		// Track row position before adding
+		tableRow := tq.queueTable.Table.GetRowCount()
+		tq.queueTable.AddRow(
+			theme.IconTaskQueue+" "+q.Name,
 			typeIcon+" "+q.Type,
 			fmt.Sprintf("%d", q.PollerCount),
 			fmt.Sprintf("%s %d", backlogIcon, q.Backlog),
 		)
 		// Color the backlog cell
-		cell := tq.queueTable.GetCell(row, 3)
+		cell := tq.queueTable.GetCell(tableRow, 3)
 		cell.SetTextColor(backlogColor)
 	}
 
@@ -264,7 +267,7 @@ func (tq *TaskQueueView) loadPollers(queueIndex int) {
 
 		info, pollers, err := provider.DescribeTaskQueue(ctx, tq.app.CurrentNamespace(), queue.Name)
 
-		tq.app.UI().QueueUpdateDraw(func() {
+		tq.app.JigApp().QueueUpdateDraw(func() {
 			if err != nil {
 				tq.showPollerError(err)
 				return
@@ -320,14 +323,14 @@ func (tq *TaskQueueView) populatePollerTable(queueType string) {
 			continue
 		}
 
-		typeIcon := ui.IconWorkflow
+		typeIcon := theme.IconWorkflow
 		if p.TaskQueueType == "Activity" {
-			typeIcon = ui.IconActivity
+			typeIcon = theme.IconActivity
 		}
 
 		lastAccess := formatRelativeTime(now, p.LastAccessTime)
 		tq.pollerTable.AddRow(
-			ui.IconConnected+" "+p.Identity,
+			theme.IconConnected+" "+p.Identity,
 			typeIcon+" "+p.TaskQueueType,
 			lastAccess,
 		)
@@ -337,8 +340,8 @@ func (tq *TaskQueueView) populatePollerTable(queueType string) {
 func (tq *TaskQueueView) showPollerError(err error) {
 	tq.pollerTable.ClearRows()
 	tq.pollerTable.SetHeaders("IDENTITY", "TYPE", "LAST ACCESS")
-	tq.pollerTable.AddColoredRow(ui.ColorFailed(),
-		ui.IconFailed+" Error loading pollers",
+	tq.pollerTable.AddRowWithColor(theme.Error(),
+		theme.IconError+" Error loading pollers",
 		err.Error(),
 		"",
 	)
@@ -361,7 +364,7 @@ func (tq *TaskQueueView) Start() {
 	tq.queueTable.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch {
 		case event.Key() == tcell.KeyTab:
-			tq.app.UI().SetFocus(tq.pollerTable)
+			tq.app.JigApp().SetFocus(tq.pollerTable)
 			return nil
 		case event.Rune() == 'r':
 			tq.refreshCurrentQueue()
@@ -373,7 +376,7 @@ func (tq *TaskQueueView) Start() {
 	tq.pollerTable.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch {
 		case event.Key() == tcell.KeyTab:
-			tq.app.UI().SetFocus(tq.queueTable)
+			tq.app.JigApp().SetFocus(tq.queueTable)
 			return nil
 		case event.Rune() == 'r':
 			tq.refreshCurrentQueue()
@@ -390,19 +393,11 @@ func (tq *TaskQueueView) Start() {
 func (tq *TaskQueueView) Stop() {
 	tq.queueTable.SetInputCapture(nil)
 	tq.pollerTable.SetInputCapture(nil)
-	if tq.unsubscribeTheme != nil {
-		tq.unsubscribeTheme()
-	}
-	// Clean up component theme listeners to prevent memory leaks and visual glitches
-	tq.queueTable.Destroy()
-	tq.pollerTable.Destroy()
-	tq.queuePanel.Destroy()
-	tq.pollerPanel.Destroy()
 }
 
 // Hints returns keybinding hints for this view.
-func (tq *TaskQueueView) Hints() []ui.KeyHint {
-	return []ui.KeyHint{
+func (tq *TaskQueueView) Hints() []KeyHint {
+	return []KeyHint{
 		{Key: "r", Description: "Refresh"},
 		{Key: "tab", Description: "Switch Panel"},
 		{Key: "j/k", Description: "Navigate"},
@@ -418,7 +413,7 @@ func (tq *TaskQueueView) Focus(delegate func(p tview.Primitive)) {
 
 // Draw applies theme colors dynamically and draws the view.
 func (tq *TaskQueueView) Draw(screen tcell.Screen) {
-	bg := ui.ColorBg()
+	bg := theme.Bg()
 	tq.SetBackgroundColor(bg)
 	tq.Flex.Draw(screen)
 }

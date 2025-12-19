@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/atterpac/loom/internal/config"
-	"github.com/atterpac/loom/internal/temporal"
-	"github.com/atterpac/loom/internal/ui"
+	"github.com/atterpac/jig/components"
+	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/tempo/internal/temporal"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -25,26 +25,25 @@ type WorkflowDiff struct {
 	eventsB   []temporal.HistoryEvent
 
 	// UI components
-	leftPanel   *ui.Panel
-	rightPanel  *ui.Panel
+	leftPanel   *components.Panel
+	rightPanel  *components.Panel
 	leftInfo    *tview.TextView
 	rightInfo   *tview.TextView
-	leftEvents  *ui.Table
-	rightEvents *ui.Table
+	leftEvents  *components.Table
+	rightEvents *components.Table
 
 	// State
-	focusLeft        bool
-	loading          bool
-	unsubscribeTheme func()
+	focusLeft bool
+	loading   bool
 }
 
 // NewWorkflowDiff creates a new workflow diff view.
 func NewWorkflowDiff(app *App, namespace string) *WorkflowDiff {
 	wd := &WorkflowDiff{
-		Flex:       tview.NewFlex().SetDirection(tview.FlexColumn),
-		app:        app,
-		namespace:  namespace,
-		focusLeft:  true,
+		Flex:      tview.NewFlex().SetDirection(tview.FlexColumn),
+		app:       app,
+		namespace: namespace,
+		focusLeft: true,
 	}
 	wd.setup()
 	return wd
@@ -59,46 +58,39 @@ func NewWorkflowDiffWithWorkflows(app *App, namespace string, workflowA, workflo
 }
 
 func (wd *WorkflowDiff) setup() {
-	wd.SetBackgroundColor(ui.ColorBg())
+	wd.SetBackgroundColor(theme.Bg())
 
 	// Create left side components
 	wd.leftInfo = tview.NewTextView().SetDynamicColors(true)
-	wd.leftInfo.SetBackgroundColor(ui.ColorBg())
-	wd.leftEvents = ui.NewTable()
+	wd.leftInfo.SetBackgroundColor(theme.Bg())
+	wd.leftEvents = components.NewTable()
 	wd.leftEvents.SetHeaders("EVENT", "TYPE", "TIME")
 
 	leftContent := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(wd.leftInfo, 8, 0, false).
 		AddItem(wd.leftEvents, 0, 1, true)
-	leftContent.SetBackgroundColor(ui.ColorBg())
+	leftContent.SetBackgroundColor(theme.Bg())
 
-	wd.leftPanel = ui.NewPanel("Workflow A")
+	wd.leftPanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Workflow A", theme.IconWorkflow))
 	wd.leftPanel.SetContent(leftContent)
 
 	// Create right side components
 	wd.rightInfo = tview.NewTextView().SetDynamicColors(true)
-	wd.rightInfo.SetBackgroundColor(ui.ColorBg())
-	wd.rightEvents = ui.NewTable()
+	wd.rightInfo.SetBackgroundColor(theme.Bg())
+	wd.rightEvents = components.NewTable()
 	wd.rightEvents.SetHeaders("EVENT", "TYPE", "TIME")
 
 	rightContent := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(wd.rightInfo, 8, 0, false).
 		AddItem(wd.rightEvents, 0, 1, true)
-	rightContent.SetBackgroundColor(ui.ColorBg())
+	rightContent.SetBackgroundColor(theme.Bg())
 
-	wd.rightPanel = ui.NewPanel("Workflow B")
+	wd.rightPanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Workflow B", theme.IconWorkflow))
 	wd.rightPanel.SetContent(rightContent)
 
 	// Build layout
 	wd.AddItem(wd.leftPanel, 0, 1, true)
 	wd.AddItem(wd.rightPanel, 0, 1, false)
-
-	// Register for theme changes
-	wd.unsubscribeTheme = ui.OnThemeChange(func(_ *config.ParsedTheme) {
-		wd.SetBackgroundColor(ui.ColorBg())
-		wd.leftInfo.SetBackgroundColor(ui.ColorBg())
-		wd.rightInfo.SetBackgroundColor(ui.ColorBg())
-	})
 }
 
 // Name returns the view name.
@@ -123,19 +115,33 @@ func (wd *WorkflowDiff) Start() {
 func (wd *WorkflowDiff) Stop() {
 	wd.leftEvents.SetInputCapture(nil)
 	wd.rightEvents.SetInputCapture(nil)
-	if wd.unsubscribeTheme != nil {
-		wd.unsubscribeTheme()
-	}
-	// Clean up component theme listeners to prevent memory leaks and visual glitches
-	wd.leftEvents.Destroy()
-	wd.rightEvents.Destroy()
-	wd.leftPanel.Destroy()
-	wd.rightPanel.Destroy()
+}
+
+// RefreshTheme updates all component colors after a theme change.
+func (wd *WorkflowDiff) RefreshTheme() {
+	bg := theme.Bg()
+
+	// Update main container
+	wd.SetBackgroundColor(bg)
+
+	// Update text views
+	wd.leftInfo.SetBackgroundColor(bg)
+	wd.rightInfo.SetBackgroundColor(bg)
+
+	// Update tables
+	wd.leftEvents.SetBackgroundColor(bg)
+	wd.rightEvents.SetBackgroundColor(bg)
+
+	// Re-render content with new theme colors
+	wd.updateLeftInfo()
+	wd.updateRightInfo()
+	wd.updateLeftEvents()
+	wd.updateRightEvents()
 }
 
 // Hints returns keybinding hints for this view.
-func (wd *WorkflowDiff) Hints() []ui.KeyHint {
-	return []ui.KeyHint{
+func (wd *WorkflowDiff) Hints() []KeyHint {
+	return []KeyHint{
 		{Key: "Tab", Description: "Switch Panel"},
 		{Key: "a", Description: "Set Left"},
 		{Key: "b", Description: "Set Right"},
@@ -155,7 +161,7 @@ func (wd *WorkflowDiff) Focus(delegate func(p tview.Primitive)) {
 
 // Draw applies theme colors dynamically and draws the view.
 func (wd *WorkflowDiff) Draw(screen tcell.Screen) {
-	bg := ui.ColorBg()
+	bg := theme.Bg()
 	wd.SetBackgroundColor(bg)
 	wd.leftInfo.SetBackgroundColor(bg)
 	wd.rightInfo.SetBackgroundColor(bg)
@@ -187,13 +193,13 @@ func (wd *WorkflowDiff) inputHandler(event *tcell.EventKey) *tcell.EventKey {
 func (wd *WorkflowDiff) toggleFocus() {
 	wd.focusLeft = !wd.focusLeft
 	if wd.focusLeft {
-		wd.app.UI().SetFocus(wd.leftEvents)
-		wd.leftPanel.SetBorderColor(ui.ColorAccent())
-		wd.rightPanel.SetBorderColor(ui.ColorPanelBorder())
+		wd.app.JigApp().SetFocus(wd.leftEvents)
+		wd.leftPanel.SetBorderColor(theme.Accent())
+		wd.rightPanel.SetBorderColor(theme.PanelBorder())
 	} else {
-		wd.app.UI().SetFocus(wd.rightEvents)
-		wd.rightPanel.SetBorderColor(ui.ColorAccent())
-		wd.leftPanel.SetBorderColor(ui.ColorPanelBorder())
+		wd.app.JigApp().SetFocus(wd.rightEvents)
+		wd.rightPanel.SetBorderColor(theme.Accent())
+		wd.leftPanel.SetBorderColor(theme.PanelBorder())
 	}
 }
 
@@ -204,9 +210,9 @@ func (wd *WorkflowDiff) showEmptyState() {
 
 [%s]Press 'a' to set the left workflow
 Press 'b' to set the right workflow[-]`,
-		ui.TagPanelTitle(),
-		ui.TagFgDim(),
-		ui.TagFg())
+		theme.TagAccent(),
+		theme.TagFgDim(),
+		theme.TagFg())
 
 	wd.leftInfo.SetText(emptyText)
 	wd.rightInfo.SetText("")
@@ -215,44 +221,65 @@ Press 'b' to set the right workflow[-]`,
 }
 
 func (wd *WorkflowDiff) promptWorkflowInput(isLeft bool) {
-	side := "Right"
-	if isLeft {
-		side = "Left"
+	side := "Left"
+	if !isLeft {
+		side = "Right"
 	}
 
-	modal := ui.NewInputModal(
-		fmt.Sprintf("Set %s Workflow", side),
-		"Enter workflow ID to compare",
-		[]ui.InputField{
-			{Name: "workflowId", Label: "Workflow ID", Placeholder: "workflow-id", Required: true},
-			{Name: "runId", Label: "Run ID", Placeholder: "(optional)", Required: false},
-		},
-	)
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Set %s Workflow", theme.IconWorkflow, side),
+		Width:    70,
+		Height:   14,
+		Backdrop: true,
+	})
 
-	modal.SetOnSubmit(func(values map[string]string) {
-		wd.closeModal("diff-input")
-		workflowID := values["workflowId"]
-		runID := values["runId"]
+	form := components.NewForm()
+	form.AddTextField("workflowID", "Workflow ID", "")
+	form.AddTextField("runID", "Run ID (optional)", "")
 
-		if workflowID != "" {
-			wd.loadWorkflow(isLeft, workflowID, runID)
+	form.SetOnSubmit(func(values map[string]any) {
+		workflowID := values["workflowID"].(string)
+		if workflowID == "" {
+			return
 		}
+		runID := values["runID"].(string)
+		wd.closeModal("workflow-input")
+		wd.loadWorkflow(isLeft, workflowID, runID)
+	})
+	form.SetOnCancel(func() {
+		wd.closeModal("workflow-input")
 	})
 
+	modal.SetContent(form)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Tab", Description: "Next field"},
+		{Key: "Enter", Description: "Load workflow"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		values := form.GetValues()
+		workflowID := values["workflowID"].(string)
+		if workflowID == "" {
+			return
+		}
+		runID := values["runID"].(string)
+		wd.closeModal("workflow-input")
+		wd.loadWorkflow(isLeft, workflowID, runID)
+	})
 	modal.SetOnCancel(func() {
-		wd.closeModal("diff-input")
+		wd.closeModal("workflow-input")
 	})
 
-	wd.app.UI().Pages().AddPage("diff-input", modal, true, true)
-	wd.app.UI().SetFocus(modal)
+	wd.app.JigApp().Pages().AddPage("workflow-input", modal, true, true)
+	wd.app.JigApp().SetFocus(form)
 }
 
 func (wd *WorkflowDiff) closeModal(name string) {
-	wd.app.UI().Pages().RemovePage(name)
+	wd.app.JigApp().Pages().RemovePage(name)
 	if wd.focusLeft {
-		wd.app.UI().SetFocus(wd.leftEvents)
+		wd.app.JigApp().SetFocus(wd.leftEvents)
 	} else {
-		wd.app.UI().SetFocus(wd.rightEvents)
+		wd.app.JigApp().SetFocus(wd.rightEvents)
 	}
 }
 
@@ -268,8 +295,8 @@ func (wd *WorkflowDiff) loadWorkflow(isLeft bool, workflowID, runID string) {
 
 		workflow, err := provider.GetWorkflow(ctx, wd.namespace, workflowID, runID)
 		if err != nil {
-			wd.app.UI().QueueUpdateDraw(func() {
-				errorText := fmt.Sprintf("[%s]Error: %s[-]", ui.TagFailed(), err.Error())
+			wd.app.JigApp().QueueUpdateDraw(func() {
+				errorText := fmt.Sprintf("[%s]Error: %s[-]", theme.TagError(), err.Error())
 				if isLeft {
 					wd.leftInfo.SetText(errorText)
 				} else {
@@ -281,17 +308,17 @@ func (wd *WorkflowDiff) loadWorkflow(isLeft bool, workflowID, runID string) {
 
 		events, _ := provider.GetWorkflowHistory(ctx, wd.namespace, workflow.ID, workflow.RunID)
 
-		wd.app.UI().QueueUpdateDraw(func() {
+		wd.app.JigApp().QueueUpdateDraw(func() {
 			if isLeft {
 				wd.workflowA = workflow
 				wd.eventsA = events
-				wd.leftPanel.SetTitle("Workflow A: " + truncate(workflow.ID, 25))
+				wd.leftPanel.SetTitle(fmt.Sprintf("%s Workflow A: %s", theme.IconWorkflow, truncate(workflow.ID, 25)))
 				wd.updateLeftInfo()
 				wd.updateLeftEvents()
 			} else {
 				wd.workflowB = workflow
 				wd.eventsB = events
-				wd.rightPanel.SetTitle("Workflow B: " + truncate(workflow.ID, 25))
+				wd.rightPanel.SetTitle(fmt.Sprintf("%s Workflow B: %s", theme.IconWorkflow, truncate(workflow.ID, 25)))
 				wd.updateRightInfo()
 				wd.updateRightEvents()
 			}
@@ -325,8 +352,8 @@ func (wd *WorkflowDiff) updateRightInfo() {
 }
 
 func (wd *WorkflowDiff) formatWorkflowInfo(w *temporal.Workflow, eventCount int) string {
-	statusColor := ui.StatusColorTag(w.Status)
-	statusIcon := ui.StatusIcon(w.Status)
+	statusColor := theme.StatusColorTag(w.Status)
+	statusIcon := theme.StatusIcon(w.Status)
 
 	duration := "-"
 	if w.EndTime != nil {
@@ -341,12 +368,12 @@ func (wd *WorkflowDiff) formatWorkflowInfo(w *temporal.Workflow, eventCount int)
 [%s]Duration:[-] [%s]%s[-]
 [%s]Events:[-] [%s]%d[-]
 [%s]Task Queue:[-] [%s]%s[-]`,
-		ui.TagFgDim(), ui.TagFg(), w.Type,
-		ui.TagFgDim(), statusColor, statusIcon, w.Status,
-		ui.TagFgDim(), ui.TagFg(), w.StartTime.Format("2006-01-02 15:04:05"),
-		ui.TagFgDim(), ui.TagFg(), duration,
-		ui.TagFgDim(), ui.TagAccent(), eventCount,
-		ui.TagFgDim(), ui.TagFg(), w.TaskQueue)
+		theme.TagFgDim(), theme.TagFg(), w.Type,
+		theme.TagFgDim(), statusColor, statusIcon, w.Status,
+		theme.TagFgDim(), theme.TagFg(), w.StartTime.Format("2006-01-02 15:04:05"),
+		theme.TagFgDim(), theme.TagFg(), duration,
+		theme.TagFgDim(), theme.TagAccent(), eventCount,
+		theme.TagFgDim(), theme.TagFg(), w.TaskQueue)
 }
 
 func (wd *WorkflowDiff) updateLeftEvents() {

@@ -1,9 +1,10 @@
-package ui
+package view
 
 import (
 	"time"
 
-	"github.com/atterpac/loom/internal/temporal"
+	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/tempo/internal/temporal"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -103,7 +104,7 @@ func (tv *TimelineView) SetNodes(nodes []*temporal.EventTreeNode) {
 // Colors are read dynamically at draw time.
 func (tv *TimelineView) Draw(screen tcell.Screen) {
 	// Read colors dynamically
-	bgColor := ColorBg()
+	bgColor := theme.Bg()
 	tv.SetBackgroundColor(bgColor)
 
 	tv.Box.DrawForSubclass(screen, tv)
@@ -157,8 +158,8 @@ func (tv *TimelineView) drawHeader(screen tcell.Screen, x, y, width int) {
 	timeRange := tv.endTime.Sub(tv.startTime)
 
 	// Draw label column header
-	labelStyle := tcell.StyleDefault.Foreground(ColorPanelTitle()).Background(ColorBg())
-	tview.Print(screen, "Event", x, y, timelineLabelWidth, tview.AlignLeft, ColorPanelTitle())
+	labelStyle := tcell.StyleDefault.Foreground(theme.PanelTitle()).Background(theme.Bg())
+	tview.Print(screen, "Event", x, y, timelineLabelWidth, tview.AlignLeft, theme.PanelTitle())
 
 	// Draw time markers
 	markerCount := 5
@@ -187,14 +188,14 @@ func (tv *TimelineView) drawHeader(screen tcell.Screen, x, y, width int) {
 		}
 
 		// Draw marker
-		tview.Print(screen, marker, pos, y, 8, tview.AlignLeft, ColorFgDim())
+		tview.Print(screen, marker, pos, y, 8, tview.AlignLeft, theme.FgDim())
 
 		// Draw tick mark
 		screen.SetContent(pos, y+1, '│', nil, labelStyle)
 	}
 
 	// Draw horizontal line under header
-	lineStyle := tcell.StyleDefault.Foreground(ColorBorder()).Background(ColorBg())
+	lineStyle := tcell.StyleDefault.Foreground(theme.Border()).Background(theme.Bg())
 	for i := x + timelineLabelWidth + 1; i < x+width; i++ {
 		screen.SetContent(i, y+1, '─', nil, lineStyle)
 	}
@@ -212,9 +213,9 @@ func (tv *TimelineView) drawLaneLabel(screen tcell.Screen, x, y int, lane Timeli
 	// Choose style based on selection
 	var style tcell.Style
 	if selected {
-		style = tcell.StyleDefault.Foreground(ColorBg()).Background(ColorHighlight())
+		style = tcell.StyleDefault.Foreground(theme.Bg()).Background(theme.Highlight())
 	} else {
-		style = tcell.StyleDefault.Foreground(tv.statusColor(lane.Status)).Background(ColorBg())
+		style = tcell.StyleDefault.Foreground(tv.statusColor(lane.Status)).Background(theme.Bg())
 	}
 
 	// Clear label area
@@ -231,7 +232,7 @@ func (tv *TimelineView) drawLaneLabel(screen tcell.Screen, x, y int, lane Timeli
 	}
 
 	// Draw separator
-	sepStyle := tcell.StyleDefault.Foreground(ColorBorder()).Background(ColorBg())
+	sepStyle := tcell.StyleDefault.Foreground(theme.Border()).Background(theme.Bg())
 	screen.SetContent(x+timelineLabelWidth, y, '│', nil, sepStyle)
 }
 
@@ -269,14 +270,14 @@ func (tv *TimelineView) drawLaneBar(screen tcell.Screen, x, y, width int, lane T
 
 	// Choose bar character and color based on status
 	barChar, barColor := tv.barStyle(lane.Status)
-	barStyle := tcell.StyleDefault.Foreground(barColor).Background(ColorBg())
+	barStyle := tcell.StyleDefault.Foreground(barColor).Background(theme.Bg())
 
 	if selected {
 		barStyle = barStyle.Bold(true)
 	}
 
 	// Draw empty space before bar
-	emptyStyle := tcell.StyleDefault.Foreground(ColorBgLight()).Background(ColorBg())
+	emptyStyle := tcell.StyleDefault.Foreground(theme.BgLight()).Background(theme.Bg())
 	for i := 0; i < barStart && i < width; i++ {
 		screen.SetContent(x+i, y, '·', nil, emptyStyle)
 	}
@@ -299,10 +300,10 @@ func (tv *TimelineView) drawLegend(screen tcell.Screen, x, y, width int) {
 		status string
 		color  tcell.Color
 	}{
-		{'█', "Completed", ColorCompleted()},
-		{'▓', "Running", ColorRunning()},
-		{'░', "Failed", ColorFailed()},
-		{'▒', "Pending", ColorFgDim()},
+		{'█', "Completed", theme.Success()},
+		{'▓', "Running", theme.Warning()},
+		{'░', "Failed", theme.Error()},
+		{'▒', "Pending", theme.FgDim()},
 	}
 
 	pos := x
@@ -311,11 +312,11 @@ func (tv *TimelineView) drawLegend(screen tcell.Screen, x, y, width int) {
 			break
 		}
 
-		style := tcell.StyleDefault.Foreground(item.color).Background(ColorBg())
+		style := tcell.StyleDefault.Foreground(item.color).Background(theme.Bg())
 		screen.SetContent(pos, y, item.char, nil, style)
 		pos++
 
-		labelStyle := tcell.StyleDefault.Foreground(ColorFgDim()).Background(ColorBg())
+		labelStyle := tcell.StyleDefault.Foreground(theme.FgDim()).Background(theme.Bg())
 		for _, r := range item.status {
 			screen.SetContent(pos, y, r, nil, labelStyle)
 			pos++
@@ -328,34 +329,23 @@ func (tv *TimelineView) drawLegend(screen tcell.Screen, x, y, width int) {
 func (tv *TimelineView) barStyle(status string) (rune, tcell.Color) {
 	switch status {
 	case "Running":
-		return '▓', ColorRunning()
+		return '▓', theme.Warning()
 	case "Completed", "Fired":
-		return '█', ColorCompleted()
+		return '█', theme.Success()
 	case "Failed", "TimedOut":
-		return '░', ColorFailed()
+		return '░', theme.Error()
 	case "Canceled", "Terminated":
-		return '▒', ColorCanceled()
+		return '▒', theme.Warning()
 	case "Scheduled", "Initiated", "Pending":
-		return '▒', ColorFgDim()
+		return '▒', theme.FgDim()
 	default:
-		return '▒', ColorFg()
+		return '▒', theme.Fg()
 	}
 }
 
 // statusColor returns the color for a status.
 func (tv *TimelineView) statusColor(status string) tcell.Color {
-	switch status {
-	case "Running":
-		return ColorRunning()
-	case "Completed", "Fired":
-		return ColorCompleted()
-	case "Failed", "TimedOut":
-		return ColorFailed()
-	case "Canceled", "Terminated":
-		return ColorCanceled()
-	default:
-		return ColorFgDim()
-	}
+	return theme.StatusColor(status)
 }
 
 // InputHandler handles keyboard input.

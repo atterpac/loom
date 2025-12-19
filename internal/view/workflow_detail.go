@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/atterpac/loom/internal/config"
-	"github.com/atterpac/loom/internal/temporal"
-	"github.com/atterpac/loom/internal/ui"
+	"github.com/atterpac/jig/components"
+	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/tempo/internal/temporal"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -23,14 +23,13 @@ type WorkflowDetail struct {
 	workflow         *temporal.Workflow
 	events           []temporal.HistoryEvent
 	leftFlex         *tview.Flex
-	workflowPanel    *ui.Panel
-	eventDetailPanel *ui.Panel
-	eventsPanel      *ui.Panel
+	workflowPanel    *components.Panel
+	eventDetailPanel *components.Panel
+	eventsPanel      *components.Panel
 	workflowView     *tview.TextView
 	eventDetailView  *tview.TextView
-	eventTable       *ui.Table
+	eventTable       *components.Table
 	loading          bool
-	unsubscribeTheme func()
 }
 
 // NewWorkflowDetail creates a new workflow detail view.
@@ -40,45 +39,45 @@ func NewWorkflowDetail(app *App, workflowID, runID string) *WorkflowDetail {
 		app:        app,
 		workflowID: workflowID,
 		runID:      runID,
-		eventTable: ui.NewTable(),
+		eventTable: components.NewTable(),
 	}
 	wd.setup()
 	return wd
 }
 
 func (wd *WorkflowDetail) setup() {
-	wd.SetBackgroundColor(ui.ColorBg())
+	wd.SetBackgroundColor(theme.Bg())
 
 	// Combined workflow info view
 	wd.workflowView = tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignLeft)
-	wd.workflowView.SetBackgroundColor(ui.ColorBg())
+	wd.workflowView.SetBackgroundColor(theme.Bg())
 
 	// Event detail view
 	wd.eventDetailView = tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignLeft)
-	wd.eventDetailView.SetBackgroundColor(ui.ColorBg())
+	wd.eventDetailView.SetBackgroundColor(theme.Bg())
 
 	// Event table
 	wd.eventTable.SetHeaders("ID", "TIME", "TYPE")
 	wd.eventTable.SetBorder(false)
-	wd.eventTable.SetBackgroundColor(ui.ColorBg())
+	wd.eventTable.SetBackgroundColor(theme.Bg())
 
-	// Create panels
-	wd.workflowPanel = ui.NewPanel("Workflow")
+	// Create panels with icons (blubber pattern)
+	wd.workflowPanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Workflow", theme.IconWorkflow))
 	wd.workflowPanel.SetContent(wd.workflowView)
 
-	wd.eventDetailPanel = ui.NewPanel("Event Detail")
+	wd.eventDetailPanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Event Detail", theme.IconInfo))
 	wd.eventDetailPanel.SetContent(wd.eventDetailView)
 
-	wd.eventsPanel = ui.NewPanel("Events")
+	wd.eventsPanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Events", theme.IconEvent))
 	wd.eventsPanel.SetContent(wd.eventTable)
 
 	// Left side: workflow info + event detail stacked
 	wd.leftFlex = tview.NewFlex().SetDirection(tview.FlexRow)
-	wd.leftFlex.SetBackgroundColor(ui.ColorBg())
+	wd.leftFlex.SetBackgroundColor(theme.Bg())
 	wd.leftFlex.AddItem(wd.workflowPanel, 0, 1, false)
 	wd.leftFlex.AddItem(wd.eventDetailPanel, 0, 1, false)
 
@@ -94,26 +93,36 @@ func (wd *WorkflowDetail) setup() {
 	})
 
 	// Show loading state initially
-	wd.workflowView.SetText(fmt.Sprintf("\n [%s]Loading...[-]", ui.TagFgDim()))
-
-	// Register for theme changes
-	wd.unsubscribeTheme = ui.OnThemeChange(func(_ *config.ParsedTheme) {
-		wd.SetBackgroundColor(ui.ColorBg())
-		wd.leftFlex.SetBackgroundColor(ui.ColorBg())
-		wd.workflowView.SetBackgroundColor(ui.ColorBg())
-		wd.eventDetailView.SetBackgroundColor(ui.ColorBg())
-		// Re-render with new colors
-		if wd.workflow != nil {
-			wd.render()
-		}
-		if len(wd.events) > 0 {
-			wd.populateEventTable()
-		}
-	})
+	wd.workflowView.SetText(fmt.Sprintf("\n [%s]Loading...[-]", theme.TagFgDim()))
 }
 
 func (wd *WorkflowDetail) setLoading(loading bool) {
 	wd.loading = loading
+}
+
+// RefreshTheme updates all component colors after a theme change.
+func (wd *WorkflowDetail) RefreshTheme() {
+	bg := theme.Bg()
+	fg := theme.Fg()
+
+	// Update main container
+	wd.SetBackgroundColor(bg)
+
+	// Update text views
+	wd.workflowView.SetBackgroundColor(bg)
+	wd.workflowView.SetTextColor(fg)
+	wd.eventDetailView.SetBackgroundColor(bg)
+	wd.eventDetailView.SetTextColor(fg)
+
+	// Update table
+	wd.eventTable.SetBackgroundColor(bg)
+
+	// Update flex containers
+	wd.leftFlex.SetBackgroundColor(bg)
+
+	// Re-render content with new theme colors
+	wd.render()
+	wd.populateEventTable()
 }
 
 func (wd *WorkflowDetail) loadData() {
@@ -130,7 +139,7 @@ func (wd *WorkflowDetail) loadData() {
 
 		workflow, err := provider.GetWorkflow(ctx, wd.app.CurrentNamespace(), wd.workflowID, wd.runID)
 
-		wd.app.UI().QueueUpdateDraw(func() {
+		wd.app.JigApp().QueueUpdateDraw(func() {
 			wd.setLoading(false)
 			if err != nil {
 				wd.showError(err)
@@ -139,7 +148,7 @@ func (wd *WorkflowDetail) loadData() {
 			wd.workflow = workflow
 			wd.render()
 			// Update hints now that we have workflow status
-			wd.app.UI().Menu().SetHints(wd.Hints())
+			wd.app.JigApp().Menu().SetHints(wd.Hints())
 		})
 	}()
 
@@ -150,7 +159,7 @@ func (wd *WorkflowDetail) loadData() {
 
 		events, err := provider.GetWorkflowHistory(ctx, wd.app.CurrentNamespace(), wd.workflowID, wd.runID)
 
-		wd.app.UI().QueueUpdateDraw(func() {
+		wd.app.JigApp().QueueUpdateDraw(func() {
 			if err != nil {
 				return
 			}
@@ -185,20 +194,20 @@ func (wd *WorkflowDetail) loadMockData() {
 }
 
 func (wd *WorkflowDetail) showError(err error) {
-	wd.workflowView.SetText(fmt.Sprintf("\n [%s]Error: %s[-]", ui.TagFailed(), err.Error()))
+	wd.workflowView.SetText(fmt.Sprintf("\n [%s]Error: %s[-]", theme.TagError(), err.Error()))
 	wd.eventDetailView.SetText("")
 }
 
 func (wd *WorkflowDetail) render() {
 	if wd.workflow == nil {
-		wd.workflowView.SetText(fmt.Sprintf(" [%s]Workflow not found[-]", ui.TagFailed()))
+		wd.workflowView.SetText(fmt.Sprintf(" [%s]Workflow not found[-]", theme.TagError()))
 		return
 	}
 
 	w := wd.workflow
 	now := time.Now()
-	statusColor := ui.StatusColorTag(w.Status)
-	statusIcon := ui.StatusIcon(w.Status)
+	statusColor := theme.StatusColorTag(w.Status)
+	statusIcon := theme.StatusIcon(w.Status)
 
 	durationStr := "In progress"
 	if w.EndTime != nil {
@@ -216,13 +225,13 @@ func (wd *WorkflowDetail) render() {
 [%s::b]Duration[-:-:-]     [%s]%s[-]
 [%s::b]Task Queue[-:-:-]   [%s]%s[-]
 [%s::b]Run ID[-:-:-]       [%s]%s[-]`,
-		ui.TagFgDim(), ui.TagFg(), w.ID,
-		ui.TagFgDim(), ui.TagFg(), w.Type,
-		ui.TagFgDim(), statusColor, statusIcon, w.Status,
-		ui.TagFgDim(), ui.TagFg(), formatRelativeTime(now, w.StartTime),
-		ui.TagFgDim(), ui.TagFg(), durationStr,
-		ui.TagFgDim(), ui.TagFg(), w.TaskQueue,
-		ui.TagFgDim(), ui.TagFgDim(), truncateStr(w.RunID, 25),
+		theme.TagFgDim(), theme.TagFg(), w.ID,
+		theme.TagFgDim(), theme.TagFg(), w.Type,
+		theme.TagFgDim(), statusColor, statusIcon, w.Status,
+		theme.TagFgDim(), theme.TagFg(), formatRelativeTime(now, w.StartTime),
+		theme.TagFgDim(), theme.TagFg(), durationStr,
+		theme.TagFgDim(), theme.TagFg(), w.TaskQueue,
+		theme.TagFgDim(), theme.TagFgDim(), truncateStr(w.RunID, 25),
 	)
 	wd.workflowView.SetText(workflowText)
 }
@@ -240,9 +249,9 @@ func (wd *WorkflowDetail) updateEventDetail(ev temporal.HistoryEvent) {
 [%s::b]Time[-:-:-]         [%s]%s[-]
 
 %s`,
-		ui.TagFgDim(), ui.TagFg(), ev.ID,
-		ui.TagFgDim(), colorTag, icon, ev.Type,
-		ui.TagFgDim(), ui.TagFg(), ev.Time.Format("2006-01-02 15:04:05.000"),
+		theme.TagFgDim(), theme.TagFg(), ev.ID,
+		theme.TagFgDim(), colorTag, icon, ev.Type,
+		theme.TagFgDim(), theme.TagFg(), ev.Time.Format("2006-01-02 15:04:05.000"),
 		formattedDetails,
 	)
 	wd.eventDetailView.SetText(detailText)
@@ -251,7 +260,7 @@ func (wd *WorkflowDetail) updateEventDetail(ev temporal.HistoryEvent) {
 // formatEventDetails parses event details and formats them with pretty JSON.
 func formatEventDetails(details string) string {
 	if details == "" {
-		return fmt.Sprintf("[%s]No details[-]", ui.TagFgDim())
+		return fmt.Sprintf("[%s]No details[-]", theme.TagFgDim())
 	}
 
 	// First check if the whole thing is JSON
@@ -316,18 +325,18 @@ func formatKeyValueDetailsWorkflow(details string) string {
 				formatted := formatJSONPretty(value)
 				if formatted != value {
 					// JSON was successfully formatted - put it on next line at left margin
-					result.WriteString(fmt.Sprintf("[%s::b]%s[-:-:-]\n", ui.TagFgDim(), paddedKey))
+					result.WriteString(fmt.Sprintf("[%s::b]%s[-:-:-]\n", theme.TagFgDim(), paddedKey))
 					result.WriteString(highlightFormattedJSONWorkflow(formatted))
 				} else {
-					result.WriteString(fmt.Sprintf("[%s::b]%s[-:-:-]  ", ui.TagFgDim(), paddedKey))
+					result.WriteString(fmt.Sprintf("[%s::b]%s[-:-:-]  ", theme.TagFgDim(), paddedKey))
 					result.WriteString(highlightJSONLineWorkflow(value))
 				}
 			} else {
-				result.WriteString(fmt.Sprintf("[%s::b]%s[-:-:-]  ", ui.TagFgDim(), paddedKey))
-				result.WriteString(fmt.Sprintf("[%s]%s[-]", ui.TagFg(), highlightValuesWorkflow(value)))
+				result.WriteString(fmt.Sprintf("[%s::b]%s[-:-:-]  ", theme.TagFgDim(), paddedKey))
+				result.WriteString(fmt.Sprintf("[%s]%s[-]", theme.TagFg(), highlightValuesWorkflow(value)))
 			}
 		} else {
-			result.WriteString(fmt.Sprintf("[%s]%s[-]", ui.TagFg(), kv.value))
+			result.WriteString(fmt.Sprintf("[%s]%s[-]", theme.TagFg(), kv.value))
 		}
 	}
 
@@ -433,7 +442,7 @@ func highlightJSONLineWorkflow(line string) string {
 		trimmed := strings.TrimSpace(prefix)
 		if strings.HasPrefix(trimmed, "\"") && strings.HasSuffix(trimmed, "\"") {
 			// JSON key with quotes - use accent color
-			return fmt.Sprintf("[%s]%s[-]:[%s]%s[-]", ui.TagAccent(), prefix, ui.TagFg(), highlightValuesWorkflow(suffix))
+			return fmt.Sprintf("[%s]%s[-]:[%s]%s[-]", theme.TagAccent(), prefix, theme.TagFg(), highlightValuesWorkflow(suffix))
 		}
 	}
 
@@ -443,9 +452,9 @@ func highlightJSONLineWorkflow(line string) string {
 // highlightValuesWorkflow highlights JSON values (booleans, null).
 func highlightValuesWorkflow(s string) string {
 	result := s
-	result = strings.ReplaceAll(result, "true", fmt.Sprintf("[%s]true[-]", ui.TagCompleted()))
-	result = strings.ReplaceAll(result, "false", fmt.Sprintf("[%s]false[-]", ui.TagFailed()))
-	result = strings.ReplaceAll(result, "null", fmt.Sprintf("[%s]null[-]", ui.TagFgDim()))
+	result = strings.ReplaceAll(result, "true", fmt.Sprintf("[%s]true[-]", theme.StatusColorTag("Completed")))
+	result = strings.ReplaceAll(result, "false", fmt.Sprintf("[%s]false[-]", theme.StatusColorTag("Failed")))
+	result = strings.ReplaceAll(result, "null", fmt.Sprintf("[%s]null[-]", theme.TagFgDim()))
 	return result
 }
 
@@ -459,7 +468,7 @@ func (wd *WorkflowDetail) populateEventTable() {
 	for _, ev := range wd.events {
 		icon := eventIcon(ev.Type)
 		color := eventColor(ev.Type)
-		wd.eventTable.AddColoredRow(color,
+		wd.eventTable.AddRowWithColor(color,
 			fmt.Sprintf("%d", ev.ID),
 			ev.Time.Format("15:04:05"),
 			icon+" "+truncateStr(ev.Type, 30),
@@ -520,6 +529,9 @@ func (wd *WorkflowDetail) Start() {
 		case 'Q':
 			wd.showQueryInput()
 			return nil
+		case 'i':
+			wd.showIOModal()
+			return nil
 		}
 		return event
 	})
@@ -529,19 +541,12 @@ func (wd *WorkflowDetail) Start() {
 // Stop is called when the view is deactivated.
 func (wd *WorkflowDetail) Stop() {
 	wd.eventTable.SetInputCapture(nil)
-	if wd.unsubscribeTheme != nil {
-		wd.unsubscribeTheme()
-	}
-	// Clean up component theme listeners to prevent memory leaks and visual glitches
-	wd.eventTable.Destroy()
-	wd.workflowPanel.Destroy()
-	wd.eventDetailPanel.Destroy()
-	wd.eventsPanel.Destroy()
 }
 
 // Hints returns keybinding hints for this view.
-func (wd *WorkflowDetail) Hints() []ui.KeyHint {
-	hints := []ui.KeyHint{
+func (wd *WorkflowDetail) Hints() []KeyHint {
+	hints := []KeyHint{
+		{Key: "i", Description: "Input/Output"},
 		{Key: "e", Description: "Event Graph"},
 		{Key: "d", Description: "Detail"},
 		{Key: "y", Description: "Yank"},
@@ -552,22 +557,22 @@ func (wd *WorkflowDetail) Hints() []ui.KeyHint {
 	// Only show mutation hints if workflow is running
 	if wd.workflow != nil && wd.workflow.Status == "Running" {
 		hints = append(hints,
-			ui.KeyHint{Key: "c", Description: "Cancel"},
-			ui.KeyHint{Key: "X", Description: "Terminate"},
-			ui.KeyHint{Key: "s", Description: "Signal"},
-			ui.KeyHint{Key: "Q", Description: "Query"},
+			KeyHint{Key: "c", Description: "Cancel"},
+			KeyHint{Key: "X", Description: "Terminate"},
+			KeyHint{Key: "s", Description: "Signal"},
+			KeyHint{Key: "Q", Description: "Query"},
 		)
 	}
 
 	// Reset is available for completed/failed workflows
 	if wd.workflow != nil && (wd.workflow.Status == "Completed" || wd.workflow.Status == "Failed" || wd.workflow.Status == "Terminated" || wd.workflow.Status == "Canceled") {
-		hints = append(hints, ui.KeyHint{Key: "R", Description: "Reset"})
+		hints = append(hints, KeyHint{Key: "R", Description: "Reset"})
 	}
 
 	hints = append(hints,
-		ui.KeyHint{Key: "D", Description: "Delete"},
-		ui.KeyHint{Key: "T", Description: "Theme"},
-		ui.KeyHint{Key: "esc", Description: "Back"},
+		KeyHint{Key: "D", Description: "Delete"},
+		KeyHint{Key: "T", Description: "Theme"},
+		KeyHint{Key: "esc", Description: "Back"},
 	)
 
 	return hints
@@ -580,7 +585,7 @@ func (wd *WorkflowDetail) Focus(delegate func(p tview.Primitive)) {
 
 // Draw applies theme colors dynamically and draws the view.
 func (wd *WorkflowDetail) Draw(screen tcell.Screen) {
-	bg := ui.ColorBg()
+	bg := theme.Bg()
 	wd.SetBackgroundColor(bg)
 	wd.leftFlex.SetBackgroundColor(bg)
 	wd.workflowView.SetBackgroundColor(bg)
@@ -595,35 +600,50 @@ func truncateStr(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-// Mutation methods
+// Mutation methods - stub implementations for migration
+// TODO: Implement full modal functionality using jig components
 
 func (wd *WorkflowDetail) showCancelConfirm() {
-	command := fmt.Sprintf(`temporal workflow cancel \
-  --workflow-id %s \
-  --run-id %s \
-  --namespace %s \
-  --reason "Cancelled via TUI"`,
-		wd.workflowID, wd.runID, wd.app.CurrentNamespace())
-
-	modal := ui.NewConfirmModal(
-		"Cancel Workflow",
-		fmt.Sprintf("Cancel workflow %s?", wd.workflowID),
-		command,
-	).SetOnConfirm(func() {
-		wd.executeCancelWorkflow()
-	}).SetOnCancel(func() {
-		wd.closeModal("confirm-cancel")
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Cancel Workflow", theme.IconWarning),
+		Width:    60,
+		Height:   12,
+		Backdrop: true,
 	})
 
-	wd.app.UI().Pages().AddPage("confirm-cancel", modal, true, true)
-	wd.app.UI().SetFocus(modal)
+	form := components.NewForm()
+	form.AddTextField("reason", "Reason (optional)", "Cancelled via tempo")
+	form.SetOnSubmit(func(values map[string]any) {
+		reason := values["reason"].(string)
+		wd.closeModal("cancel-confirm")
+		wd.executeCancelWorkflow(reason)
+	})
+	form.SetOnCancel(func() {
+		wd.closeModal("cancel-confirm")
+	})
+
+	modal.SetContent(form)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter", Description: "Confirm"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		values := form.GetValues()
+		reason := values["reason"].(string)
+		wd.closeModal("cancel-confirm")
+		wd.executeCancelWorkflow(reason)
+	})
+	modal.SetOnCancel(func() {
+		wd.closeModal("cancel-confirm")
+	})
+
+	wd.app.JigApp().Pages().AddPage("cancel-confirm", modal, true, true)
+	wd.app.JigApp().SetFocus(form)
 }
 
-func (wd *WorkflowDetail) executeCancelWorkflow() {
+func (wd *WorkflowDetail) executeCancelWorkflow(reason string) {
 	provider := wd.app.Provider()
 	if provider == nil {
-		wd.closeModal("confirm-cancel")
-		wd.showError(fmt.Errorf("no provider connected"))
 		return
 	}
 
@@ -631,51 +651,84 @@ func (wd *WorkflowDetail) executeCancelWorkflow() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		err := provider.CancelWorkflow(ctx,
+		err := provider.CancelWorkflow(
+			ctx,
 			wd.app.CurrentNamespace(),
 			wd.workflowID,
 			wd.runID,
-			"Cancelled via TUI")
+			reason,
+		)
 
-		wd.app.UI().QueueUpdateDraw(func() {
-			wd.closeModal("confirm-cancel")
+		wd.app.JigApp().QueueUpdateDraw(func() {
 			if err != nil {
 				wd.showError(err)
-			} else {
-				wd.loadData() // Refresh to show new status
+				return
 			}
+			wd.loadData() // Refresh to show updated status
 		})
 	}()
 }
 
 func (wd *WorkflowDetail) showTerminateConfirm() {
-	command := fmt.Sprintf(`temporal workflow terminate \
-  --workflow-id %s \
-  --run-id %s \
-  --namespace %s \
-  --reason "Terminated via TUI"`,
-		wd.workflowID, wd.runID, wd.app.CurrentNamespace())
-
-	modal := ui.NewConfirmModal(
-		"Terminate Workflow",
-		fmt.Sprintf("Terminate workflow %s?", wd.workflowID),
-		command,
-	).SetWarning("This will forcefully terminate the workflow. No cleanup code will run.").
-		SetOnConfirm(func() {
-			wd.executeTerminateWorkflow()
-		}).SetOnCancel(func() {
-		wd.closeModal("confirm-terminate")
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Terminate Workflow", theme.IconError),
+		Width:    65,
+		Height:   14,
+		Backdrop: true,
 	})
 
-	wd.app.UI().Pages().AddPage("confirm-terminate", modal, true, true)
-	wd.app.UI().SetFocus(modal)
+	// Create content with warning message
+	contentFlex := tview.NewFlex().SetDirection(tview.FlexRow)
+	contentFlex.SetBackgroundColor(theme.Bg())
+
+	warningText := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft)
+	warningText.SetBackgroundColor(theme.Bg())
+	warningText.SetText(fmt.Sprintf("[%s]Warning: Termination is immediate and irreversible.\nNo cleanup code will run in the workflow.[-]", theme.TagError()))
+
+	form := components.NewForm()
+	form.AddTextField("reason", "Reason (required)", "Terminated via tempo")
+	form.SetOnSubmit(func(values map[string]any) {
+		reason := values["reason"].(string)
+		if reason == "" {
+			return // Require a reason
+		}
+		wd.closeModal("terminate-confirm")
+		wd.executeTerminateWorkflow(reason)
+	})
+	form.SetOnCancel(func() {
+		wd.closeModal("terminate-confirm")
+	})
+
+	contentFlex.AddItem(warningText, 3, 0, false)
+	contentFlex.AddItem(form, 0, 1, true)
+
+	modal.SetContent(contentFlex)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter", Description: "Terminate"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		values := form.GetValues()
+		reason := values["reason"].(string)
+		if reason == "" {
+			return
+		}
+		wd.closeModal("terminate-confirm")
+		wd.executeTerminateWorkflow(reason)
+	})
+	modal.SetOnCancel(func() {
+		wd.closeModal("terminate-confirm")
+	})
+
+	wd.app.JigApp().Pages().AddPage("terminate-confirm", modal, true, true)
+	wd.app.JigApp().SetFocus(form)
 }
 
-func (wd *WorkflowDetail) executeTerminateWorkflow() {
+func (wd *WorkflowDetail) executeTerminateWorkflow(reason string) {
 	provider := wd.app.Provider()
 	if provider == nil {
-		wd.closeModal("confirm-terminate")
-		wd.showError(fmt.Errorf("no provider connected"))
 		return
 	}
 
@@ -683,50 +736,89 @@ func (wd *WorkflowDetail) executeTerminateWorkflow() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		err := provider.TerminateWorkflow(ctx,
+		err := provider.TerminateWorkflow(
+			ctx,
 			wd.app.CurrentNamespace(),
 			wd.workflowID,
 			wd.runID,
-			"Terminated via TUI")
+			reason,
+		)
 
-		wd.app.UI().QueueUpdateDraw(func() {
-			wd.closeModal("confirm-terminate")
+		wd.app.JigApp().QueueUpdateDraw(func() {
 			if err != nil {
 				wd.showError(err)
-			} else {
-				wd.loadData() // Refresh to show new status
+				return
 			}
+			wd.loadData() // Refresh to show updated status
 		})
 	}()
 }
 
 func (wd *WorkflowDetail) showDeleteConfirm() {
-	command := fmt.Sprintf(`temporal workflow delete \
-  --workflow-id %s \
-  --run-id %s \
-  --namespace %s`,
-		wd.workflowID, wd.runID, wd.app.CurrentNamespace())
-
-	modal := ui.NewConfirmModal(
-		"Delete Workflow",
-		fmt.Sprintf("Delete workflow %s?", wd.workflowID),
-		command,
-	).SetWarning("This will permanently delete the workflow and its history. This cannot be undone.").
-		SetOnConfirm(func() {
-			wd.executeDeleteWorkflow()
-		}).SetOnCancel(func() {
-		wd.closeModal("confirm-delete")
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Delete Workflow", theme.IconError),
+		Width:    70,
+		Height:   16,
+		Backdrop: true,
 	})
 
-	wd.app.UI().Pages().AddPage("confirm-delete", modal, true, true)
-	wd.app.UI().SetFocus(modal)
+	// Create content with warning message
+	contentFlex := tview.NewFlex().SetDirection(tview.FlexRow)
+	contentFlex.SetBackgroundColor(theme.Bg())
+
+	warningText := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft)
+	warningText.SetBackgroundColor(theme.Bg())
+	warningText.SetText(fmt.Sprintf(`[%s]Warning: This will permanently delete the workflow and its history.
+This action cannot be undone.[-]
+
+[%s]Workflow ID:[-] [%s]%s[-]`,
+		theme.TagError(),
+		theme.TagFgDim(), theme.TagFg(), wd.workflowID))
+
+	form := components.NewForm()
+	form.AddTextField("confirm", "Type workflow ID to confirm", "")
+	form.SetOnSubmit(func(values map[string]any) {
+		confirm := values["confirm"].(string)
+		if confirm != wd.workflowID {
+			return // Must match workflow ID
+		}
+		wd.closeModal("delete-confirm")
+		wd.executeDeleteWorkflow()
+	})
+	form.SetOnCancel(func() {
+		wd.closeModal("delete-confirm")
+	})
+
+	contentFlex.AddItem(warningText, 5, 0, false)
+	contentFlex.AddItem(form, 0, 1, true)
+
+	modal.SetContent(contentFlex)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter", Description: "Delete"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		values := form.GetValues()
+		confirm := values["confirm"].(string)
+		if confirm != wd.workflowID {
+			return
+		}
+		wd.closeModal("delete-confirm")
+		wd.executeDeleteWorkflow()
+	})
+	modal.SetOnCancel(func() {
+		wd.closeModal("delete-confirm")
+	})
+
+	wd.app.JigApp().Pages().AddPage("delete-confirm", modal, true, true)
+	wd.app.JigApp().SetFocus(form)
 }
 
 func (wd *WorkflowDetail) executeDeleteWorkflow() {
 	provider := wd.app.Provider()
 	if provider == nil {
-		wd.closeModal("confirm-delete")
-		wd.showError(fmt.Errorf("no provider connected"))
 		return
 	}
 
@@ -734,85 +826,102 @@ func (wd *WorkflowDetail) executeDeleteWorkflow() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		err := provider.DeleteWorkflow(ctx,
+		err := provider.DeleteWorkflow(
+			ctx,
 			wd.app.CurrentNamespace(),
 			wd.workflowID,
-			wd.runID)
+			wd.runID,
+		)
 
-		wd.app.UI().QueueUpdateDraw(func() {
-			wd.closeModal("confirm-delete")
+		wd.app.JigApp().QueueUpdateDraw(func() {
 			if err != nil {
 				wd.showError(err)
-			} else {
-				// Navigate back to workflow list since this workflow no longer exists
-				wd.app.UI().Pages().Pop()
+				return
 			}
+			// Navigate back to workflow list after deletion
+			wd.app.JigApp().Pages().Pop()
 		})
 	}()
 }
 
 func (wd *WorkflowDetail) showSignalInput() {
-	fields := []ui.InputField{
-		{
-			Name:        "signalName",
-			Label:       "Signal Name",
-			Placeholder: "e.g., approve, cancel, update",
-			Required:    true,
-		},
-		{
-			Name:        "input",
-			Label:       "Input (JSON)",
-			Placeholder: `e.g., {"approved": true}`,
-			Required:    false,
-		},
-	}
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Signal Workflow", theme.IconSignal),
+		Width:    70,
+		Height:   16,
+		Backdrop: true,
+	})
 
-	modal := ui.NewInputModal(
-		"Signal Workflow",
-		fmt.Sprintf("Send signal to workflow %s", wd.workflowID),
-		fields,
-	).SetOnSubmit(func(values map[string]string) {
-		wd.executeSignalWorkflow(values["signalName"], values["input"])
-	}).SetOnCancel(func() {
+	form := components.NewForm()
+	form.AddTextField("signalName", "Signal Name", "")
+	form.AddTextField("input", "Input (JSON, optional)", "")
+	form.SetOnSubmit(func(values map[string]any) {
+		signalName := values["signalName"].(string)
+		if signalName == "" {
+			return // Require signal name
+		}
+		input := values["input"].(string)
+		wd.closeModal("signal-input")
+		wd.executeSignalWorkflow(signalName, input)
+	})
+	form.SetOnCancel(func() {
 		wd.closeModal("signal-input")
 	})
 
-	wd.app.UI().Pages().AddPage("signal-input", modal, true, true)
-	wd.app.UI().SetFocus(modal)
+	modal.SetContent(form)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Tab", Description: "Next field"},
+		{Key: "Enter", Description: "Send signal"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		values := form.GetValues()
+		signalName := values["signalName"].(string)
+		if signalName == "" {
+			return
+		}
+		input := values["input"].(string)
+		wd.closeModal("signal-input")
+		wd.executeSignalWorkflow(signalName, input)
+	})
+	modal.SetOnCancel(func() {
+		wd.closeModal("signal-input")
+	})
+
+	wd.app.JigApp().Pages().AddPage("signal-input", modal, true, true)
+	wd.app.JigApp().SetFocus(form)
 }
 
 func (wd *WorkflowDetail) executeSignalWorkflow(signalName, input string) {
 	provider := wd.app.Provider()
 	if provider == nil {
-		wd.closeModal("signal-input")
-		wd.showError(fmt.Errorf("no provider connected"))
 		return
-	}
-
-	// Convert input string to bytes (empty if no input provided)
-	var inputBytes []byte
-	if input != "" {
-		inputBytes = []byte(input)
 	}
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		err := provider.SignalWorkflow(ctx,
+		var inputBytes []byte
+		if input != "" {
+			inputBytes = []byte(input)
+		}
+
+		err := provider.SignalWorkflow(
+			ctx,
 			wd.app.CurrentNamespace(),
 			wd.workflowID,
 			wd.runID,
 			signalName,
-			inputBytes)
+			inputBytes,
+		)
 
-		wd.app.UI().QueueUpdateDraw(func() {
-			wd.closeModal("signal-input")
+		wd.app.JigApp().QueueUpdateDraw(func() {
 			if err != nil {
 				wd.showError(err)
-			} else {
-				wd.loadData() // Refresh to show signal event in history
+				return
 			}
+			wd.loadData() // Refresh to show signal event
 		})
 	}()
 }
@@ -820,128 +929,220 @@ func (wd *WorkflowDetail) executeSignalWorkflow(signalName, input string) {
 func (wd *WorkflowDetail) showResetSelector() {
 	provider := wd.app.Provider()
 	if provider == nil {
-		wd.showError(fmt.Errorf("no provider connected"))
 		return
 	}
 
-	// Show loading state
-	wd.workflowPanel.SetTitle("Workflow (Loading reset points...)")
+	// Show loading modal
+	loadingModal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Loading Reset Points...", theme.IconInfo),
+		Width:    40,
+		Height:   5,
+		Backdrop: true,
+	})
+	loadingText := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	loadingText.SetBackgroundColor(theme.Bg())
+	loadingText.SetText(fmt.Sprintf("[%s]Fetching reset points...[-]", theme.TagFgDim()))
+	loadingModal.SetContent(loadingText)
+	wd.app.JigApp().Pages().AddPage("reset-loading", loadingModal, true, true)
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		resetPoints, err := provider.GetResetPoints(ctx,
-			wd.app.CurrentNamespace(),
-			wd.workflowID,
-			wd.runID)
+		resetPoints, err := provider.GetResetPoints(ctx, wd.app.CurrentNamespace(), wd.workflowID, wd.runID)
 
-		wd.app.UI().QueueUpdateDraw(func() {
-			wd.workflowPanel.SetTitle("Workflow")
+		wd.app.JigApp().QueueUpdateDraw(func() {
+			wd.closeModal("reset-loading")
 
 			if err != nil {
-				wd.showError(fmt.Errorf("failed to get reset points: %w", err))
+				wd.showError(err)
 				return
 			}
 
 			if len(resetPoints) == 0 {
-				wd.showError(fmt.Errorf("no valid reset points found for this workflow"))
+				wd.showResetError("No valid reset points found for this workflow.")
 				return
 			}
 
-			// Check for failure point - if found, show quick reset modal
-			picker := ui.NewResetPicker(resetPoints)
-			if failurePoint, found := picker.GetFirstFailurePoint(); found {
-				wd.showQuickResetModal(failurePoint, resetPoints)
-			} else {
-				// No failure point, show full picker directly
-				wd.showResetPicker(resetPoints)
-			}
+			// Show the reset picker with all points
+			wd.showResetPicker(resetPoints)
 		})
 	}()
 }
 
 func (wd *WorkflowDetail) showQuickResetModal(failurePoint temporal.ResetPoint, allPoints []temporal.ResetPoint) {
-	modal := ui.NewQuickResetModal(wd.workflowID, failurePoint)
-
-	modal.SetOnConfirm(func() {
-		wd.closeModal("quick-reset")
-		wd.showResetConfirm(failurePoint.EventID)
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Quick Reset", theme.IconWarning),
+		Width:    70,
+		Height:   14,
+		Backdrop: true,
 	})
 
-	modal.SetOnAdvanced(func() {
+	contentFlex := tview.NewFlex().SetDirection(tview.FlexRow)
+	contentFlex.SetBackgroundColor(theme.Bg())
+
+	infoText := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft)
+	infoText.SetBackgroundColor(theme.Bg())
+	infoText.SetText(fmt.Sprintf(`[%s]Reset to failure point:[-]
+
+[%s]Event ID:[-]    [%s]%d[-]
+[%s]Type:[-]        [%s]%s[-]
+[%s]Description:[-] [%s]%s[-]`,
+		theme.TagAccent(),
+		theme.TagFgDim(), theme.TagFg(), failurePoint.EventID,
+		theme.TagFgDim(), theme.TagFg(), failurePoint.EventType,
+		theme.TagFgDim(), theme.TagFg(), failurePoint.Description))
+
+	form := components.NewForm()
+	form.AddTextField("reason", "Reason", "Reset via tempo")
+	form.SetOnSubmit(func(values map[string]any) {
 		wd.closeModal("quick-reset")
-		wd.showResetPicker(allPoints)
+		wd.executeResetWorkflow(failurePoint.EventID, values["reason"].(string))
+	})
+	form.SetOnCancel(func() {
+		wd.closeModal("quick-reset")
 	})
 
+	contentFlex.AddItem(infoText, 6, 0, false)
+	contentFlex.AddItem(form, 0, 1, true)
+
+	modal.SetContent(contentFlex)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter", Description: "Reset"},
+		{Key: "p", Description: "Pick another"},
+		{Key: "Esc", Description: "Cancel"},
+	})
 	modal.SetOnCancel(func() {
 		wd.closeModal("quick-reset")
 	})
 
-	wd.app.UI().Pages().AddPage("quick-reset", modal, true, true)
-	wd.app.UI().SetFocus(modal)
+	wd.app.JigApp().Pages().AddPage("quick-reset", modal, true, true)
+	wd.app.JigApp().SetFocus(form)
 }
 
 func (wd *WorkflowDetail) showResetPicker(resetPoints []temporal.ResetPoint) {
-	picker := ui.NewResetPicker(resetPoints)
-
-	picker.SetOnSelect(func(eventID int64, description string) {
-		wd.closeModal("reset-picker")
-		wd.showResetConfirm(eventID)
+	modal := components.NewModal(components.ModalConfig{
+		Title:     fmt.Sprintf("%s Select Reset Point", theme.IconInfo),
+		Width:     90,
+		Height:    20,
+		MinHeight: 15,
+		Backdrop:  true,
 	})
 
-	picker.SetOnCancel(func() {
+	// Create a table for reset points
+	table := components.NewTable()
+	table.SetHeaders("EVENT ID", "TYPE", "TIME", "DESCRIPTION")
+	table.SetBackgroundColor(theme.Bg())
+
+	for _, rp := range resetPoints {
+		table.AddRow(
+			fmt.Sprintf("%d", rp.EventID),
+			truncateStr(rp.EventType, 25),
+			rp.Timestamp.Format("15:04:05"),
+			truncateStr(rp.Description, 35),
+		)
+	}
+
+	table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEnter:
+			row := table.SelectedRow()
+			if row >= 0 && row < len(resetPoints) {
+				wd.closeModal("reset-picker")
+				wd.showResetConfirm(resetPoints[row])
+			}
+			return nil
+		case tcell.KeyEscape:
+			wd.closeModal("reset-picker")
+			return nil
+		case tcell.KeyRune:
+			if event.Rune() == 'q' {
+				wd.closeModal("reset-picker")
+				return nil
+			}
+		}
+		return event
+	})
+
+	modal.SetContent(table)
+	modal.SetHints([]components.KeyHint{
+		{Key: "j/k", Description: "Navigate"},
+		{Key: "Enter", Description: "Select"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnCancel(func() {
 		wd.closeModal("reset-picker")
 	})
 
-	// Create a centered modal layout for the picker
-	height := picker.GetHeight()
-	width := 80
-
-	flex := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexColumn).
-			AddItem(nil, 0, 1, false).
-			AddItem(picker, width, 0, true).
-			AddItem(nil, 0, 1, false), height, 0, true).
-		AddItem(nil, 0, 1, false)
-	flex.SetBackgroundColor(ui.ColorBg())
-
-	wd.app.UI().Pages().AddPage("reset-picker", flex, true, true)
-	wd.app.UI().SetFocus(picker)
+	wd.app.JigApp().Pages().AddPage("reset-picker", modal, true, true)
+	wd.app.JigApp().SetFocus(table)
 }
 
-func (wd *WorkflowDetail) showResetConfirm(eventID int64) {
-	wd.closeModal("reset-selector")
-
-	command := fmt.Sprintf(`temporal workflow reset \
-  --workflow-id %s \
-  --run-id %s \
-  --namespace %s \
-  --event-id %d \
-  --reason "Reset via TUI"`,
-		wd.workflowID, wd.runID, wd.app.CurrentNamespace(), eventID)
-
-	modal := ui.NewConfirmModal(
-		"Reset Workflow",
-		fmt.Sprintf("Reset workflow %s to event %d?", wd.workflowID, eventID),
-		command,
-	).SetWarning("This will create a new run from the specified event. The current run will remain unchanged.").
-		SetOnConfirm(func() {
-			wd.executeResetWorkflow(eventID)
-		}).SetOnCancel(func() {
-		wd.closeModal("confirm-reset")
+func (wd *WorkflowDetail) showResetConfirm(resetPoint temporal.ResetPoint) {
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Confirm Reset", theme.IconWarning),
+		Width:    70,
+		Height:   16,
+		Backdrop: true,
 	})
 
-	wd.app.UI().Pages().AddPage("confirm-reset", modal, true, true)
-	wd.app.UI().SetFocus(modal)
+	contentFlex := tview.NewFlex().SetDirection(tview.FlexRow)
+	contentFlex.SetBackgroundColor(theme.Bg())
+
+	infoText := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft)
+	infoText.SetBackgroundColor(theme.Bg())
+	infoText.SetText(fmt.Sprintf(`[%s]Reset workflow to event:[-]
+
+[%s]Event ID:[-]    [%s]%d[-]
+[%s]Type:[-]        [%s]%s[-]
+[%s]Time:[-]        [%s]%s[-]
+[%s]Description:[-] [%s]%s[-]`,
+		theme.TagAccent(),
+		theme.TagFgDim(), theme.TagFg(), resetPoint.EventID,
+		theme.TagFgDim(), theme.TagFg(), resetPoint.EventType,
+		theme.TagFgDim(), theme.TagFg(), resetPoint.Timestamp.Format("2006-01-02 15:04:05"),
+		theme.TagFgDim(), theme.TagFg(), resetPoint.Description))
+
+	form := components.NewForm()
+	form.AddTextField("reason", "Reason", "Reset via tempo")
+	form.SetOnSubmit(func(values map[string]any) {
+		wd.closeModal("reset-confirm")
+		wd.executeResetWorkflow(resetPoint.EventID, values["reason"].(string))
+	})
+	form.SetOnCancel(func() {
+		wd.closeModal("reset-confirm")
+	})
+
+	contentFlex.AddItem(infoText, 7, 0, false)
+	contentFlex.AddItem(form, 0, 1, true)
+
+	modal.SetContent(contentFlex)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter", Description: "Reset"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		values := form.GetValues()
+		wd.closeModal("reset-confirm")
+		wd.executeResetWorkflow(resetPoint.EventID, values["reason"].(string))
+	})
+	modal.SetOnCancel(func() {
+		wd.closeModal("reset-confirm")
+	})
+
+	wd.app.JigApp().Pages().AddPage("reset-confirm", modal, true, true)
+	wd.app.JigApp().SetFocus(form)
 }
 
-func (wd *WorkflowDetail) executeResetWorkflow(eventID int64) {
+func (wd *WorkflowDetail) executeResetWorkflow(eventID int64, reason string) {
 	provider := wd.app.Provider()
 	if provider == nil {
-		wd.closeModal("confirm-reset")
-		wd.showError(fmt.Errorf("no provider connected"))
 		return
 	}
 
@@ -949,105 +1150,146 @@ func (wd *WorkflowDetail) executeResetWorkflow(eventID int64) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		newRunID, err := provider.ResetWorkflow(ctx,
+		newRunID, err := provider.ResetWorkflow(
+			ctx,
 			wd.app.CurrentNamespace(),
 			wd.workflowID,
 			wd.runID,
 			eventID,
-			"Reset via TUI")
+			reason,
+		)
 
-		wd.app.UI().QueueUpdateDraw(func() {
-			wd.closeModal("confirm-reset")
+		wd.app.JigApp().QueueUpdateDraw(func() {
 			if err != nil {
 				wd.showError(err)
-			} else {
-				// Navigate to the new run
-				wd.runID = newRunID
-				wd.loadData()
+				return
 			}
+			// Update to the new run ID and reload
+			wd.runID = newRunID
+			wd.loadData()
 		})
 	}()
 }
 
+func (wd *WorkflowDetail) showResetError(message string) {
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Reset Error", theme.IconError),
+		Width:    50,
+		Height:   8,
+		Backdrop: true,
+	})
+
+	errorText := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	errorText.SetBackgroundColor(theme.Bg())
+	errorText.SetText(fmt.Sprintf("[%s]%s[-]", theme.TagError(), message))
+
+	modal.SetContent(errorText)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter/Esc", Description: "Close"},
+	})
+	modal.SetOnSubmit(func() {
+		wd.closeModal("reset-error")
+	})
+	modal.SetOnCancel(func() {
+		wd.closeModal("reset-error")
+	})
+
+	wd.app.JigApp().Pages().AddPage("reset-error", modal, true, true)
+}
+
 func (wd *WorkflowDetail) closeModal(name string) {
-	wd.app.UI().Pages().RemovePage(name)
+	wd.app.JigApp().Pages().RemovePage(name)
 	// Restore focus to current view
-	if current := wd.app.UI().Pages().Current(); current != nil {
-		wd.app.UI().SetFocus(current)
+	if current := wd.app.JigApp().Pages().Current(); current != nil {
+		wd.app.JigApp().SetFocus(current)
 	}
 }
 
-// Query methods
-
 func (wd *WorkflowDetail) showQueryInput() {
-	// Check if workflow is running - queries only work on running workflows
-	if wd.workflow == nil || wd.workflow.Status != "Running" {
-		wd.showError(fmt.Errorf("queries can only be executed on running workflows"))
-		return
-	}
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Query Workflow", theme.IconInfo),
+		Width:    70,
+		Height:   18,
+		Backdrop: true,
+	})
 
-	fields := []ui.InputField{
-		{
-			Name:        "queryType",
-			Label:       "Query Type",
-			Placeholder: "__stack_trace (or custom query handler name)",
-			Required:    true,
-		},
-		{
-			Name:        "args",
-			Label:       "Arguments (JSON)",
-			Placeholder: `e.g., {"key": "value"} (optional)`,
-			Required:    false,
-		},
-	}
+	form := components.NewForm()
+	form.AddSelect("queryType", "Query Type", []string{"__stack_trace", "custom"})
+	form.AddTextField("customQuery", "Custom Query Name", "")
+	form.AddTextField("args", "Arguments (JSON, optional)", "")
 
-	modal := ui.NewInputModal(
-		"Query Workflow",
-		fmt.Sprintf("Execute query on workflow %s", wd.workflowID),
-		fields,
-	).SetOnSubmit(func(values map[string]string) {
-		wd.executeQuery(values["queryType"], values["args"])
-	}).SetOnCancel(func() {
+	form.SetOnSubmit(func(values map[string]any) {
+		queryType := values["queryType"].(string)
+		if queryType == "custom" {
+			queryType = values["customQuery"].(string)
+		}
+		if queryType == "" {
+			return
+		}
+		args := values["args"].(string)
+		wd.closeModal("query-input")
+		wd.executeQuery(queryType, args)
+	})
+	form.SetOnCancel(func() {
 		wd.closeModal("query-input")
 	})
 
-	wd.app.UI().Pages().AddPage("query-input", modal, true, true)
-	wd.app.UI().SetFocus(modal)
+	modal.SetContent(form)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Tab", Description: "Next field"},
+		{Key: "Enter", Description: "Execute query"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		values := form.GetValues()
+		queryType := values["queryType"].(string)
+		if queryType == "custom" {
+			queryType = values["customQuery"].(string)
+		}
+		if queryType == "" {
+			return
+		}
+		args := values["args"].(string)
+		wd.closeModal("query-input")
+		wd.executeQuery(queryType, args)
+	})
+	modal.SetOnCancel(func() {
+		wd.closeModal("query-input")
+	})
+
+	wd.app.JigApp().Pages().AddPage("query-input", modal, true, true)
+	wd.app.JigApp().SetFocus(form)
 }
 
 func (wd *WorkflowDetail) executeQuery(queryType, args string) {
-	wd.closeModal("query-input")
-
 	provider := wd.app.Provider()
 	if provider == nil {
-		wd.showError(fmt.Errorf("no provider connected"))
 		return
-	}
-
-	// Convert args string to bytes (empty if no args provided)
-	var argsBytes []byte
-	if args != "" {
-		argsBytes = []byte(args)
 	}
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		result, err := provider.QueryWorkflow(ctx,
+		var argsBytes []byte
+		if args != "" {
+			argsBytes = []byte(args)
+		}
+
+		result, err := provider.QueryWorkflow(
+			ctx,
 			wd.app.CurrentNamespace(),
 			wd.workflowID,
 			wd.runID,
 			queryType,
-			argsBytes)
+			argsBytes,
+		)
 
-		wd.app.UI().QueueUpdateDraw(func() {
+		wd.app.JigApp().QueueUpdateDraw(func() {
 			if err != nil {
 				wd.showQueryError(queryType, err.Error())
-				return
-			}
-			if result.Error != "" {
-				wd.showQueryError(queryType, result.Error)
 				return
 			}
 			wd.showQueryResult(queryType, result.Result)
@@ -1056,28 +1298,127 @@ func (wd *WorkflowDetail) executeQuery(queryType, args string) {
 }
 
 func (wd *WorkflowDetail) showQueryResult(queryType, result string) {
-	modal := ui.NewQueryResultModal().
-		SetResult(queryType, result).
-		SetOnClose(func() {
-			wd.closeModal("query-result")
-		})
+	modal := components.NewModal(components.ModalConfig{
+		Title:     fmt.Sprintf("%s Query Result: %s", theme.IconInfo, queryType),
+		Width:     0,
+		Height:    0,
+		MinWidth:  80,
+		MinHeight: 20,
+		Backdrop:  true,
+	})
 
-	wd.app.UI().Pages().AddPage("query-result", modal, true, true)
-	wd.app.UI().SetFocus(modal)
+	// Create scrollable text view for result
+	resultView := tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true).
+		SetWrap(true)
+	resultView.SetBackgroundColor(theme.Bg())
+	resultView.SetTextColor(theme.Fg())
+
+	// Format the result (attempt to pretty-print JSON)
+	formatted := formatJSONPretty(result)
+	highlighted := highlightFormattedJSONWorkflow(formatted)
+	resultView.SetText(highlighted)
+
+	panel := components.NewPanel().SetTitle("Result")
+	panel.SetContent(resultView)
+
+	resultView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEscape:
+			wd.closeModal("query-result")
+			return nil
+		case tcell.KeyDown:
+			row, col := resultView.GetScrollOffset()
+			resultView.ScrollTo(row+1, col)
+			return nil
+		case tcell.KeyUp:
+			row, col := resultView.GetScrollOffset()
+			if row > 0 {
+				resultView.ScrollTo(row-1, col)
+			}
+			return nil
+		case tcell.KeyRune:
+			switch event.Rune() {
+			case 'j':
+				row, col := resultView.GetScrollOffset()
+				resultView.ScrollTo(row+1, col)
+				return nil
+			case 'k':
+				row, col := resultView.GetScrollOffset()
+				if row > 0 {
+					resultView.ScrollTo(row-1, col)
+				}
+				return nil
+			case 'g':
+				resultView.ScrollTo(0, 0)
+				return nil
+			case 'G':
+				resultView.ScrollToEnd()
+				return nil
+			case 'y':
+				copyToClipboard(result)
+				// Show "Copied!" feedback
+				panel.SetTitle(fmt.Sprintf("%s Copied!", theme.IconCompleted))
+				panel.SetTitleColor(theme.StatusColor("Completed"))
+				go func() {
+					time.Sleep(1 * time.Second)
+					wd.app.JigApp().QueueUpdateDraw(func() {
+						panel.SetTitle("Result")
+						panel.SetTitleColor(0)
+					})
+				}()
+				return nil
+			case 'q':
+				wd.closeModal("query-result")
+				return nil
+			}
+		}
+		return event
+	})
+
+	modal.SetContent(panel)
+	modal.SetHints([]components.KeyHint{
+		{Key: "j/k", Description: "Scroll"},
+		{Key: "y", Description: "Copy"},
+		{Key: "Esc", Description: "Close"},
+	})
+	modal.SetOnCancel(func() {
+		wd.closeModal("query-result")
+	})
+
+	wd.app.JigApp().Pages().AddPage("query-result", modal, true, true)
+	wd.app.JigApp().SetFocus(resultView)
 }
 
 func (wd *WorkflowDetail) showQueryError(queryType, errMsg string) {
-	modal := ui.NewQueryResultModal().
-		SetError(queryType, errMsg).
-		SetOnClose(func() {
-			wd.closeModal("query-result")
-		})
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Query Failed: %s", theme.IconError, queryType),
+		Width:    60,
+		Height:   10,
+		Backdrop: true,
+	})
 
-	wd.app.UI().Pages().AddPage("query-result", modal, true, true)
-	wd.app.UI().SetFocus(modal)
+	errorText := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft)
+	errorText.SetBackgroundColor(theme.Bg())
+	errorText.SetText(fmt.Sprintf("[%s]Error executing query:[-]\n\n[%s]%s[-]",
+		theme.TagError(), theme.TagFg(), errMsg))
+
+	modal.SetContent(errorText)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter/Esc", Description: "Close"},
+	})
+	modal.SetOnSubmit(func() {
+		wd.closeModal("query-error")
+	})
+	modal.SetOnCancel(func() {
+		wd.closeModal("query-error")
+	})
+
+	wd.app.JigApp().Pages().AddPage("query-error", modal, true, true)
 }
-
-// Yank and detail methods
 
 // getSelectedEventDetails returns the details for the currently selected event.
 func (wd *WorkflowDetail) getSelectedEventDetails() (string, string) {
@@ -1096,9 +1437,9 @@ func (wd *WorkflowDetail) yankEventData() {
 		return
 	}
 
-	if err := ui.CopyToClipboard(data); err != nil {
+	if err := copyToClipboard(data); err != nil {
 		wd.eventDetailView.SetText(fmt.Sprintf("[%s]%s Failed to copy: %s[-]",
-			ui.TagFailed(), ui.IconFailed, err.Error()))
+			theme.TagError(), theme.IconError, err.Error()))
 		return
 	}
 
@@ -1109,14 +1450,14 @@ func (wd *WorkflowDetail) yankEventData() {
 [%s]%s[-]
 
 [%s]%s[-]`,
-		ui.TagPanelTitle(),
-		ui.TagAccent(), eventType,
-		ui.TagCompleted(), "Event data copied!"))
+		theme.TagAccent(),
+		theme.TagAccent(), eventType,
+		theme.StatusColorTag("Completed"), "Event data copied!"))
 
 	// Restore detail after a brief delay
 	go func() {
 		time.Sleep(1500 * time.Millisecond)
-		wd.app.UI().QueueUpdateDraw(func() {
+		wd.app.JigApp().QueueUpdateDraw(func() {
 			row := wd.eventTable.SelectedRow()
 			if row >= 0 && row < len(wd.events) {
 				wd.updateEventDetail(wd.events[row])
@@ -1127,96 +1468,144 @@ func (wd *WorkflowDetail) yankEventData() {
 
 // showEventDetailModal shows a full-screen modal with the event details.
 func (wd *WorkflowDetail) showEventDetailModal() {
-	eventType, data := wd.getSelectedEventDetails()
-	if data == "" {
+	row := wd.eventTable.SelectedRow()
+	if row < 0 || row >= len(wd.events) {
 		return
 	}
 
-	// Create scrollable text view for the detail
-	textView := tview.NewTextView()
-	textView.SetDynamicColors(true)
-	textView.SetScrollable(true)
-	textView.SetWordWrap(true)
-	textView.SetBackgroundColor(ui.ColorBg())
-	textView.SetTextColor(ui.ColorFg())
+	ev := wd.events[row]
 
-	// Format with syntax highlighting
-	formattedData := formatDetailViewWithHighlighting(data)
-	textView.SetText(formattedData)
-
-	// Create modal using the base Modal component for consistent styling
-	modal := ui.NewModal(ui.ModalConfig{
-		Title:     "Detail",
-		Width:     80,
-		Height:    20,
-		MinHeight: 10,
-		MaxHeight: 30,
-		Backdrop:  true,
+	// Create modal
+	modal := components.NewModal(components.ModalConfig{
+		Title:     fmt.Sprintf("%s Event: %s", theme.IconEvent, truncateEventTypeStr(ev.Type)),
+		Width:     0,
+		Height:    0,
+		MinWidth:  100,
+		MinHeight: 30,
 	})
-	modal.SetContent(textView)
-	modal.SetHints([]ui.KeyHint{
+
+	// Create scrollable text view for details
+	detailView := tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true).
+		SetWrap(true)
+	detailView.SetBackgroundColor(theme.Bg())
+	detailView.SetTextColor(theme.Fg())
+
+	// Format the event details
+	icon := eventIcon(ev.Type)
+	colorTag := eventColorTag(ev.Type)
+
+	headerText := fmt.Sprintf(`[%s::b]Event ID[-:-:-]     [%s]%d[-]
+[%s::b]Type[-:-:-]         [%s]%s %s[-]
+[%s::b]Time[-:-:-]         [%s]%s[-]
+
+[%s::b]Details[-:-:-]`,
+		theme.TagFgDim(), theme.TagFg(), ev.ID,
+		theme.TagFgDim(), colorTag, icon, ev.Type,
+		theme.TagFgDim(), theme.TagFg(), ev.Time.Format("2006-01-02 15:04:05.000"),
+		theme.TagAccent(),
+	)
+
+	// Format the details with syntax highlighting
+	formattedDetails := formatEventDetails(ev.Details)
+	fullText := headerText + "\n" + formattedDetails
+
+	detailView.SetText(fullText)
+
+	// Create panel
+	panel := components.NewPanel().SetTitle(fmt.Sprintf("%s Details", theme.IconInfo))
+	panel.SetContent(detailView)
+
+	modal.SetContent(panel)
+	modal.SetHints([]components.KeyHint{
 		{Key: "j/k", Description: "Scroll"},
 		{Key: "g/G", Description: "Top/Bottom"},
-		{Key: "y", Description: "Yank"},
-		{Key: "q", Description: "Close"},
+		{Key: "y", Description: "Copy"},
+		{Key: "esc", Description: "Close"},
+	})
+	modal.SetOnCancel(func() {
+		wd.closeEventDetailModal()
 	})
 
-	// Update panel title with event type
-	modal.GetPanel().SetTitle(fmt.Sprintf("Detail: %s", truncateEventTypeStr(eventType)))
-
-	modal.SetOnClose(func() {
-		wd.closeModal("event-detail")
-	})
-
-	// Input handler for the modal
-	textView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	// Handle input
+	detailView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyEscape:
-			wd.closeModal("event-detail")
+			wd.closeEventDetailModal()
+			return nil
+		case tcell.KeyDown:
+			row, col := detailView.GetScrollOffset()
+			detailView.ScrollTo(row+1, col)
+			return nil
+		case tcell.KeyUp:
+			row, col := detailView.GetScrollOffset()
+			if row > 0 {
+				detailView.ScrollTo(row-1, col)
+			}
+			return nil
+		case tcell.KeyPgDn:
+			row, col := detailView.GetScrollOffset()
+			detailView.ScrollTo(row+10, col)
+			return nil
+		case tcell.KeyPgUp:
+			row, col := detailView.GetScrollOffset()
+			if row > 10 {
+				detailView.ScrollTo(row-10, col)
+			} else {
+				detailView.ScrollTo(0, col)
+			}
 			return nil
 		case tcell.KeyRune:
 			switch event.Rune() {
-			case 'q':
-				wd.closeModal("event-detail")
+			case 'j':
+				row, col := detailView.GetScrollOffset()
+				detailView.ScrollTo(row+1, col)
+				return nil
+			case 'k':
+				row, col := detailView.GetScrollOffset()
+				if row > 0 {
+					detailView.ScrollTo(row-1, col)
+				}
+				return nil
+			case 'g':
+				detailView.ScrollTo(0, 0)
+				return nil
+			case 'G':
+				detailView.ScrollToEnd()
 				return nil
 			case 'y':
-				if err := ui.CopyToClipboard(data); err == nil {
-					// Show brief feedback
-					title := fmt.Sprintf("Detail: %s", truncateEventTypeStr(eventType))
-					modal.GetPanel().SetTitle("Copied!")
-					modal.GetPanel().SetTitleColor(ui.ColorCompleted())
+				// Copy the raw details
+				if ev.Details != "" {
+					copyToClipboard(prettyPrintJSONDetail(ev.Details))
+					// Show "Copied!" feedback
+					panel.SetTitle(fmt.Sprintf("%s Copied!", theme.IconCompleted))
+					panel.SetTitleColor(theme.StatusColor("Completed"))
 					go func() {
 						time.Sleep(1 * time.Second)
-						wd.app.UI().QueueUpdateDraw(func() {
-							modal.GetPanel().SetTitle(title)
-							modal.GetPanel().SetTitleColor(tcell.ColorDefault)
+						wd.app.JigApp().QueueUpdateDraw(func() {
+							panel.SetTitle(fmt.Sprintf("%s Details", theme.IconInfo))
+							panel.SetTitleColor(0)
 						})
 					}()
 				}
 				return nil
-			case 'j':
-				row, _ := textView.GetScrollOffset()
-				textView.ScrollTo(row+1, 0)
-				return nil
-			case 'k':
-				row, _ := textView.GetScrollOffset()
-				if row > 0 {
-					textView.ScrollTo(row-1, 0)
-				}
-				return nil
-			case 'G':
-				textView.ScrollToEnd()
-				return nil
-			case 'g':
-				textView.ScrollTo(0, 0)
+			case 'q':
+				wd.closeEventDetailModal()
 				return nil
 			}
 		}
 		return event
 	})
 
-	wd.app.UI().Pages().AddPage("event-detail", modal, true, true)
-	wd.app.UI().SetFocus(textView)
+	wd.app.JigApp().Pages().AddPage("event-detail-modal", modal, true, true)
+	wd.app.JigApp().SetFocus(detailView)
+}
+
+// closeEventDetailModal closes the event detail modal.
+func (wd *WorkflowDetail) closeEventDetailModal() {
+	wd.app.JigApp().Pages().RemovePage("event-detail-modal")
+	wd.app.JigApp().SetFocus(wd.eventTable)
 }
 
 // truncateEventTypeStr shortens long event type names for the title.
@@ -1301,9 +1690,9 @@ func highlightDetailLine(line string) string {
 
 		trimmed := strings.TrimSpace(prefix)
 		if strings.HasPrefix(trimmed, "\"") || strings.HasPrefix(trimmed, "'") {
-			return fmt.Sprintf("[%s]%s[-]%s", ui.TagAccent(), prefix, highlightDetailValue(suffix))
+			return fmt.Sprintf("[%s]%s[-]%s", theme.TagAccent(), prefix, highlightDetailValue(suffix))
 		} else if !strings.Contains(trimmed, " ") && len(trimmed) > 0 {
-			return fmt.Sprintf("[%s::b]%s[-:-:-]%s", ui.TagAccent(), prefix, highlightDetailValue(suffix))
+			return fmt.Sprintf("[%s::b]%s[-:-:-]%s", theme.TagAccent(), prefix, highlightDetailValue(suffix))
 		}
 	}
 
@@ -1313,8 +1702,229 @@ func highlightDetailLine(line string) string {
 // highlightDetailValue highlights JSON values.
 func highlightDetailValue(s string) string {
 	result := s
-	result = strings.ReplaceAll(result, "true", fmt.Sprintf("[%s]true[-]", ui.TagCompleted()))
-	result = strings.ReplaceAll(result, "false", fmt.Sprintf("[%s]false[-]", ui.TagFailed()))
-	result = strings.ReplaceAll(result, "null", fmt.Sprintf("[%s]null[-]", ui.TagFgDim()))
+	result = strings.ReplaceAll(result, "true", fmt.Sprintf("[%s]true[-]", theme.StatusColorTag("Completed")))
+	result = strings.ReplaceAll(result, "false", fmt.Sprintf("[%s]false[-]", theme.StatusColorTag("Failed")))
+	result = strings.ReplaceAll(result, "null", fmt.Sprintf("[%s]null[-]", theme.TagFgDim()))
 	return result
+}
+
+// showIOModal displays a modal with workflow input and output side by side.
+func (wd *WorkflowDetail) showIOModal() {
+	if wd.workflow == nil {
+		return
+	}
+
+	// Create modal - use percentage-based sizing for larger display
+	modal := components.NewModal(components.ModalConfig{
+		Title:     fmt.Sprintf("%s Input/Output: %s", theme.IconWorkflow, truncateStr(wd.workflow.Type, 30)),
+		Width:     0,  // 0 means use percentage
+		Height:    0,
+		MinWidth:  120,
+		MinHeight: 35,
+	})
+
+	// Create two side-by-side text views for input and output
+	inputView := tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true).
+		SetWrap(true)
+	inputView.SetBackgroundColor(theme.Bg())
+	inputView.SetTextColor(theme.Fg())
+
+	outputView := tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true).
+		SetWrap(true)
+	outputView.SetBackgroundColor(theme.Bg())
+	outputView.SetTextColor(theme.Fg())
+
+	// Format input
+	inputText := formatIOContent("Input", wd.workflow.Input)
+	inputView.SetText(inputText)
+
+	// Format output
+	outputText := formatIOContent("Output", wd.workflow.Output)
+	outputView.SetText(outputText)
+
+	// Create panels for each side with visual indicator for focus
+	inputPanel := components.NewPanel().SetTitle(fmt.Sprintf("%s Input", theme.IconArrowRight))
+	inputPanel.SetContent(inputView)
+
+	outputPanel := components.NewPanel().SetTitle(fmt.Sprintf("%s Output", theme.IconArrowLeft))
+	outputPanel.SetContent(outputView)
+
+	// Layout: side by side
+	flex := tview.NewFlex().SetDirection(tview.FlexColumn).
+		AddItem(inputPanel, 0, 1, true).
+		AddItem(outputPanel, 0, 1, false)
+	flex.SetBackgroundColor(theme.Bg())
+
+	modal.SetContent(flex)
+	modal.SetHints([]components.KeyHint{
+		{Key: "tab/h/l", Description: "Switch"},
+		{Key: "j/k", Description: "Scroll"},
+		{Key: "y", Description: "Copy"},
+		{Key: "esc", Description: "Close"},
+	})
+	modal.SetOnCancel(func() {
+		wd.closeIOModal()
+	})
+
+	// Track which pane is focused and store references for the handler
+	focusedInput := true
+
+	// Update panel titles and colors to show focus
+	updatePanelTitles := func() {
+		if focusedInput {
+			inputPanel.SetTitle(fmt.Sprintf("%s Input (active)", theme.IconArrowRight))
+			inputPanel.SetTitleColor(theme.Accent())
+			outputPanel.SetTitle(fmt.Sprintf("%s Output", theme.IconArrowLeft))
+			outputPanel.SetTitleColor(0) // Use default (PanelTitle color)
+		} else {
+			inputPanel.SetTitle(fmt.Sprintf("%s Input", theme.IconArrowRight))
+			inputPanel.SetTitleColor(0) // Use default
+			outputPanel.SetTitle(fmt.Sprintf("%s Output (active)", theme.IconArrowLeft))
+			outputPanel.SetTitleColor(theme.Accent())
+		}
+	}
+	updatePanelTitles()
+
+	// Switch focus helper
+	switchFocus := func() {
+		focusedInput = !focusedInput
+		updatePanelTitles()
+		if focusedInput {
+			wd.app.JigApp().SetFocus(inputView)
+		} else {
+			wd.app.JigApp().SetFocus(outputView)
+		}
+	}
+
+	// Scroll helper
+	scrollView := func(delta int) {
+		var view *tview.TextView
+		if focusedInput {
+			view = inputView
+		} else {
+			view = outputView
+		}
+		row, col := view.GetScrollOffset()
+		newRow := row + delta
+		if newRow < 0 {
+			newRow = 0
+		}
+		view.ScrollTo(newRow, col)
+	}
+
+	// Handle input - shared handler for both views
+	inputHandler := func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEscape:
+			wd.closeIOModal()
+			return nil
+		case tcell.KeyTab, tcell.KeyBacktab:
+			switchFocus()
+			return nil
+		case tcell.KeyDown:
+			scrollView(1)
+			return nil
+		case tcell.KeyUp:
+			scrollView(-1)
+			return nil
+		case tcell.KeyPgDn:
+			scrollView(10)
+			return nil
+		case tcell.KeyPgUp:
+			scrollView(-10)
+			return nil
+		case tcell.KeyRune:
+			switch event.Rune() {
+			case 'h':
+				if !focusedInput {
+					switchFocus()
+				}
+				return nil
+			case 'l':
+				if focusedInput {
+					switchFocus()
+				}
+				return nil
+			case 'j':
+				scrollView(1)
+				return nil
+			case 'k':
+				scrollView(-1)
+				return nil
+			case 'g':
+				// Go to top
+				if focusedInput {
+					inputView.ScrollTo(0, 0)
+				} else {
+					outputView.ScrollTo(0, 0)
+				}
+				return nil
+			case 'G':
+				// Go to bottom - scroll to a large number
+				if focusedInput {
+					inputView.ScrollToEnd()
+				} else {
+					outputView.ScrollToEnd()
+				}
+				return nil
+			case 'y':
+				// Copy the content of the focused pane
+				var content string
+				var panel *components.Panel
+				if focusedInput {
+					content = wd.workflow.Input
+					panel = inputPanel
+				} else {
+					content = wd.workflow.Output
+					panel = outputPanel
+				}
+				if content != "" {
+					copyToClipboard(content)
+					// Show "Copied!" feedback
+					panel.SetTitle(fmt.Sprintf("%s Copied!", theme.IconCompleted))
+					panel.SetTitleColor(theme.StatusColor("Completed"))
+					go func() {
+						time.Sleep(1 * time.Second)
+						wd.app.JigApp().QueueUpdateDraw(func() {
+							updatePanelTitles()
+						})
+					}()
+				}
+				return nil
+			case 'q':
+				wd.closeIOModal()
+				return nil
+			}
+		}
+		return event
+	}
+
+	inputView.SetInputCapture(inputHandler)
+	outputView.SetInputCapture(inputHandler)
+
+	wd.app.JigApp().Pages().AddPage("io-modal", modal, true, true)
+	wd.app.JigApp().SetFocus(inputView)
+}
+
+// formatIOContent formats input or output content for display.
+func formatIOContent(label, content string) string {
+	if content == "" {
+		return fmt.Sprintf("[%s]No %s[-]", theme.TagFgDim(), strings.ToLower(label))
+	}
+
+	// Pretty print if it's JSON
+	formatted := formatJSONPretty(content)
+	highlighted := highlightFormattedJSONWorkflow(formatted)
+
+	return highlighted
+}
+
+// closeIOModal closes the IO modal.
+func (wd *WorkflowDetail) closeIOModal() {
+	wd.app.JigApp().Pages().RemovePage("io-modal")
+	wd.app.JigApp().SetFocus(wd.eventTable)
 }

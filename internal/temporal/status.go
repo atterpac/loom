@@ -1,6 +1,7 @@
 package temporal
 
 import (
+	"github.com/atterpac/jig/theme"
 	"go.temporal.io/api/enums/v1"
 )
 
@@ -75,4 +76,22 @@ func MapTaskQueueType(tqType enums.TaskQueueType) string {
 	default:
 		return "Unknown"
 	}
+}
+
+// RegisterTemporalStatuses registers Temporal-specific statuses with jig's theme system.
+// Uses dynamic colors that update when theme changes.
+func RegisterTemporalStatuses() {
+	// Workflow execution statuses - use dynamic theme colors
+	theme.RegisterStatusDynamic(StatusRunning, theme.Info, theme.IconRunning)
+	theme.RegisterStatusDynamic(StatusCompleted, theme.Success, theme.IconCompleted)
+	theme.RegisterStatusDynamic(StatusFailed, theme.Error, theme.IconFailed)
+	theme.RegisterStatusDynamic(StatusCanceled, theme.Warning, theme.IconCanceled)
+	theme.RegisterStatusDynamic(StatusTerminated, theme.Error, theme.IconStop)
+	theme.RegisterStatusDynamic(StatusTimedOut, theme.Warning, theme.IconTimedOut)
+	theme.RegisterStatusDynamic(StatusUnknown, theme.FgDim, theme.IconPending)
+
+	// Namespace states
+	theme.RegisterStatusDynamic(NamespaceStateActive, theme.Success, theme.IconCheck)
+	theme.RegisterStatusDynamic(NamespaceStateDeprecated, theme.Warning, theme.IconWarning)
+	theme.RegisterStatusDynamic(NamespaceStateDeleted, theme.Error, theme.IconDelete)
 }

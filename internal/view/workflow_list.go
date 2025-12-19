@@ -3,12 +3,14 @@ package view
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
-	"github.com/atterpac/loom/internal/config"
-	"github.com/atterpac/loom/internal/temporal"
-	"github.com/atterpac/loom/internal/ui"
+	"github.com/atterpac/jig/components"
+	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/tempo/internal/temporal"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -18,26 +20,29 @@ type WorkflowList struct {
 	*tview.Flex
 	app              *App
 	namespace        string
-	table            *ui.Table
-	leftPanel        *ui.Panel
-	rightPanel       *ui.Panel
+	table            *components.Table
+	leftPanel        *components.Panel
+	rightPanel       *components.Panel
 	preview          *tview.TextView
-	emptyState       *ui.EmptyState
-	noResultsState   *ui.EmptyState
+	emptyState       *components.EmptyState
+	noResultsState   *components.EmptyState
 	allWorkflows     []temporal.Workflow // Full unfiltered list
 	workflows        []temporal.Workflow // Filtered list for display
 	filterText       string
-	visibilityQuery  string              // Temporal visibility query
+	visibilityQuery  string // Temporal visibility query
 	loading          bool
 	autoRefresh      bool
 	showPreview      bool
 	refreshTicker    *time.Ticker
 	stopRefresh      chan struct{}
-	selectionMode    bool   // Multi-select mode active
+	selectionMode    bool     // Multi-select mode active
 	searchHistory    []string // History of visibility queries
 	historyIndex     int      // Current position in history (-1 = not browsing)
 	maxHistorySize   int      // Maximum number of history entries
-	unsubscribeTheme func()
+	// Server-side completion support
+	serverCompletions   []string            // Cached completions from server query
+	lastCompletionQuery string              // Last query sent to server (to avoid duplicates)
+	originalWorkflows   []temporal.Workflow // Original workflows before server search
 }
 
 // NewWorkflowList creates a new workflow list view.
@@ -46,7 +51,7 @@ func NewWorkflowList(app *App, namespace string) *WorkflowList {
 		Flex:           tview.NewFlex().SetDirection(tview.FlexColumn),
 		app:            app,
 		namespace:      namespace,
-		table:          ui.NewTable(),
+		table:          components.NewTable(),
 		preview:        tview.NewTextView(),
 		workflows:      []temporal.Workflow{},
 		showPreview:    true,
@@ -62,24 +67,30 @@ func NewWorkflowList(app *App, namespace string) *WorkflowList {
 func (wl *WorkflowList) setup() {
 	wl.table.SetHeaders("WORKFLOW ID", "TYPE", "STATUS", "START TIME")
 	wl.table.SetBorder(false)
-	wl.table.SetBackgroundColor(ui.ColorBg())
-	wl.SetBackgroundColor(ui.ColorBg())
+	wl.table.SetBackgroundColor(theme.Bg())
+	wl.SetBackgroundColor(theme.Bg())
 
 	// Configure preview
 	wl.preview.SetDynamicColors(true)
-	wl.preview.SetBackgroundColor(ui.ColorBg())
-	wl.preview.SetTextColor(ui.ColorFg())
+	wl.preview.SetBackgroundColor(theme.Bg())
+	wl.preview.SetTextColor(theme.Fg())
 	wl.preview.SetWordWrap(true)
 
 	// Create empty states
-	wl.emptyState = ui.EmptyStateNoWorkflows()
-	wl.noResultsState = ui.EmptyStateNoResults()
+	wl.emptyState = components.NewEmptyState().
+		SetIcon(theme.IconInfo).
+		SetTitle("No Workflows").
+		SetMessage("No workflows found in this namespace")
+	wl.noResultsState = components.NewEmptyState().
+		SetIcon(theme.IconSearch).
+		SetTitle("No Results").
+		SetMessage("No workflows match the current filter")
 
-	// Create panels
-	wl.leftPanel = ui.NewPanel("Workflows")
+	// Create panels with icons (blubber pattern)
+	wl.leftPanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Workflows", theme.IconWorkflow))
 	wl.leftPanel.SetContent(wl.table)
 
-	wl.rightPanel = ui.NewPanel("Preview")
+	wl.rightPanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Preview", theme.IconInfo))
 	wl.rightPanel.SetContent(wl.preview)
 
 	// Selection change handler to update preview
@@ -94,22 +105,6 @@ func (wl *WorkflowList) setup() {
 		if row >= 0 && row < len(wl.workflows) {
 			wf := wl.workflows[row]
 			wl.app.NavigateToWorkflowDetail(wf.ID, wf.RunID)
-		}
-	})
-
-	// Register for theme changes
-	wl.unsubscribeTheme = ui.OnThemeChange(func(_ *config.ParsedTheme) {
-		wl.SetBackgroundColor(ui.ColorBg())
-		wl.preview.SetBackgroundColor(ui.ColorBg())
-		wl.preview.SetTextColor(ui.ColorFg())
-		// Re-render table with new colors
-		if len(wl.workflows) > 0 {
-			wl.populateTable()
-			// Explicitly update preview with new theme colors
-			row := wl.table.SelectedRow()
-			if row >= 0 && row < len(wl.workflows) {
-				wl.updatePreview(wl.workflows[row])
-			}
 		}
 	})
 
@@ -131,10 +126,28 @@ func (wl *WorkflowList) togglePreview() {
 	wl.buildLayout()
 }
 
+// RefreshTheme updates all component colors after a theme change.
+func (wl *WorkflowList) RefreshTheme() {
+	bg := theme.Bg()
+
+	// Update main container
+	wl.SetBackgroundColor(bg)
+
+	// Update table
+	wl.table.SetBackgroundColor(bg)
+
+	// Update preview
+	wl.preview.SetBackgroundColor(bg)
+	wl.preview.SetTextColor(theme.Fg())
+
+	// Re-render table with new theme colors
+	wl.populateTable()
+}
+
 func (wl *WorkflowList) updatePreview(w temporal.Workflow) {
 	now := time.Now()
-	statusColor := ui.StatusColorTag(w.Status)
-	statusIcon := ui.StatusIcon(w.Status)
+	statusColor := theme.StatusColorTag(w.Status)
+	statusIcon := theme.StatusIcon(w.Status)
 
 	endTimeStr := "-"
 	durationStr := "-"
@@ -168,22 +181,22 @@ func (wl *WorkflowList) updatePreview(w temporal.Workflow) {
 
 [%s]Run ID[-]
 [%s]%s[-]`,
-		ui.TagPanelTitle(),
-		ui.TagFg(), truncate(w.ID, 35),
-		ui.TagFgDim(),
+		theme.TagPanelTitle(),
+		theme.TagFg(), truncate(w.ID, 35),
+		theme.TagFgDim(),
 		statusColor, statusIcon, w.Status,
-		ui.TagFgDim(),
-		ui.TagFg(), w.Type,
-		ui.TagFgDim(),
-		ui.TagFg(), formatRelativeTime(now, w.StartTime),
-		ui.TagFgDim(),
-		ui.TagFg(), endTimeStr,
-		ui.TagFgDim(),
-		ui.TagFg(), durationStr,
-		ui.TagFgDim(),
-		ui.TagFg(), w.TaskQueue,
-		ui.TagFgDim(),
-		ui.TagFgDim(), truncate(w.RunID, 30),
+		theme.TagFgDim(),
+		theme.TagFg(), w.Type,
+		theme.TagFgDim(),
+		theme.TagFg(), formatRelativeTime(now, w.StartTime),
+		theme.TagFgDim(),
+		theme.TagFg(), endTimeStr,
+		theme.TagFgDim(),
+		theme.TagFg(), durationStr,
+		theme.TagFgDim(),
+		theme.TagFg(), w.TaskQueue,
+		theme.TagFgDim(),
+		theme.TagFgDim(), truncate(w.RunID, 30),
 	)
 	wl.preview.SetText(text)
 }
@@ -195,7 +208,6 @@ func (wl *WorkflowList) setLoading(loading bool) {
 func (wl *WorkflowList) loadData() {
 	provider := wl.app.Provider()
 	if provider == nil {
-		// Fallback to mock data if no provider
 		wl.loadMockData()
 		return
 	}
@@ -206,14 +218,14 @@ func (wl *WorkflowList) loadData() {
 		defer cancel()
 
 		// Resolve time placeholders in the query
-		resolvedQuery := ui.ResolveTimePlaceholders(wl.visibilityQuery)
+		resolvedQuery := resolveTimePlaceholders(wl.visibilityQuery)
 		opts := temporal.ListOptions{
 			PageSize: 100,
-			Query:    resolvedQuery, // Use visibility query if set
+			Query:    resolvedQuery,
 		}
 		workflows, _, err := provider.ListWorkflows(ctx, wl.namespace, opts)
 
-		wl.app.UI().QueueUpdateDraw(func() {
+		wl.app.JigApp().QueueUpdateDraw(func() {
 			wl.setLoading(false)
 			if err != nil {
 				wl.showError(err)
@@ -227,26 +239,49 @@ func (wl *WorkflowList) loadData() {
 
 // applyFilter filters allWorkflows based on filterText and updates the display.
 func (wl *WorkflowList) applyFilter() {
+	wl.applyFilterWithFallback(false)
+}
+
+// applyFilterWithFallback filters locally, optionally falling back to server-side search.
+func (wl *WorkflowList) applyFilterWithFallback(serverFallback bool) {
 	if wl.filterText == "" {
 		wl.workflows = wl.allWorkflows
 	} else {
 		filter := strings.ToLower(wl.filterText)
 		wl.workflows = nil
 		for _, w := range wl.allWorkflows {
-			// Match against workflow ID, type, or status
 			if strings.Contains(strings.ToLower(w.ID), filter) ||
 				strings.Contains(strings.ToLower(w.Type), filter) ||
 				strings.Contains(strings.ToLower(w.Status), filter) {
 				wl.workflows = append(wl.workflows, w)
 			}
 		}
+
+		if len(wl.workflows) == 0 && serverFallback && wl.visibilityQuery == "" {
+			wl.convertFilterToVisibilityQuery()
+			return
+		}
 	}
 	wl.populateTable()
 	wl.updateStats()
 }
 
+func (wl *WorkflowList) convertFilterToVisibilityQuery() {
+	if wl.filterText == "" {
+		return
+	}
+
+	searchTerm := wl.filterText
+	wl.visibilityQuery = fmt.Sprintf(
+		"WorkflowId STARTS_WITH '%s' OR WorkflowType STARTS_WITH '%s'",
+		searchTerm, searchTerm,
+	)
+	wl.filterText = ""
+	wl.updatePanelTitle()
+	wl.loadData()
+}
+
 func (wl *WorkflowList) loadMockData() {
-	// Mock data fallback when no provider is configured
 	now := time.Now()
 	wl.allWorkflows = []temporal.Workflow{
 		{
@@ -283,32 +318,26 @@ func ptr[T any](v T) *T {
 }
 
 func (wl *WorkflowList) populateTable() {
-	// Preserve current selection
 	currentRow := wl.table.SelectedRow()
 
 	wl.table.ClearRows()
 	wl.table.SetHeaders("WORKFLOW ID", "TYPE", "STATUS", "START TIME")
 
-	// Handle empty states
 	if len(wl.workflows) == 0 {
 		if len(wl.allWorkflows) == 0 {
-			// No workflows at all
 			wl.leftPanel.SetContent(wl.emptyState)
 		} else {
-			// No results from filter
 			wl.leftPanel.SetContent(wl.noResultsState)
 		}
 		wl.preview.SetText("")
 		return
 	}
 
-	// Show table with data
 	wl.leftPanel.SetContent(wl.table)
 
 	now := time.Now()
 	for _, w := range wl.workflows {
-		// Use AddStyledRow for status icon and coloring
-		wl.table.AddStyledRow(w.Status,
+		wl.table.AddStyledRowSimple(w.Status,
 			truncate(w.ID, 25),
 			truncate(w.Type, 15),
 			w.Status,
@@ -317,7 +346,6 @@ func (wl *WorkflowList) populateTable() {
 	}
 
 	if wl.table.RowCount() > 0 {
-		// Restore previous selection if valid, otherwise select first row
 		if currentRow >= 0 && currentRow < len(wl.workflows) {
 			wl.table.SelectRow(currentRow)
 			wl.updatePreview(wl.workflows[currentRow])
@@ -331,25 +359,29 @@ func (wl *WorkflowList) populateTable() {
 }
 
 func (wl *WorkflowList) updateStats() {
-	running, completed, failed := 0, 0, 0
+	var running, completed, failed int
 	for _, w := range wl.workflows {
 		switch w.Status {
-		case "Running":
+		case temporal.StatusRunning:
 			running++
-		case "Completed":
+		case temporal.StatusCompleted:
 			completed++
-		case "Failed":
+		case temporal.StatusFailed:
 			failed++
 		}
 	}
-	wl.app.UI().StatsBar().SetWorkflowStats(running, completed, failed)
+	wl.app.SetWorkflowStats(WorkflowStats{
+		Running:   running,
+		Completed: completed,
+		Failed:    failed,
+	})
 }
 
 func (wl *WorkflowList) showError(err error) {
 	wl.table.ClearRows()
 	wl.table.SetHeaders("WORKFLOW ID", "TYPE", "STATUS", "START TIME")
-	wl.table.AddColoredRow(ui.ColorFailed(),
-		ui.IconFailed+" Error loading workflows",
+	wl.table.AddRowWithColor(theme.Error(),
+		theme.IconError+" Error loading workflows",
 		err.Error(),
 		"",
 		"",
@@ -371,7 +403,7 @@ func (wl *WorkflowList) startAutoRefresh() {
 		for {
 			select {
 			case <-wl.refreshTicker.C:
-				wl.app.UI().QueueUpdateDraw(func() {
+				wl.app.JigApp().QueueUpdateDraw(func() {
 					wl.loadData()
 				})
 			case <-wl.stopRefresh:
@@ -386,7 +418,6 @@ func (wl *WorkflowList) stopAutoRefresh() {
 		wl.refreshTicker.Stop()
 		wl.refreshTicker = nil
 	}
-	// Signal stop to the goroutine
 	select {
 	case wl.stopRefresh <- struct{}{}:
 	default:
@@ -401,7 +432,6 @@ func (wl *WorkflowList) Name() string {
 // Start is called when the view becomes active.
 func (wl *WorkflowList) Start() {
 	wl.table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		// Handle space for selection toggle when in selection mode
 		if event.Key() == tcell.KeyRune && event.Rune() == ' ' && wl.selectionMode {
 			wl.table.ToggleSelection()
 			wl.updateSelectionPreview()
@@ -413,15 +443,12 @@ func (wl *WorkflowList) Start() {
 			wl.showFilter()
 			return nil
 		case 'F':
-			// Visibility query with autocomplete
 			wl.showVisibilityQuery()
 			return nil
 		case 'f':
-			// Query templates
 			wl.showQueryTemplates()
 			return nil
 		case 'D':
-			// Date range picker
 			wl.showDateRangePicker()
 			return nil
 		case 't':
@@ -443,44 +470,36 @@ func (wl *WorkflowList) Start() {
 			wl.copyWorkflowID()
 			return nil
 		case 'v':
-			// Toggle selection mode
 			wl.toggleSelectionMode()
 			return nil
 		case 'c':
-			// Batch cancel (only in selection mode with selections)
-			if wl.selectionMode && wl.table.SelectionCount() > 0 {
+			if wl.selectionMode && len(wl.table.GetSelectedRows()) > 0 {
 				wl.showBatchCancelConfirm()
 				return nil
 			}
 		case 'X':
-			// Batch terminate (only in selection mode with selections)
-			if wl.selectionMode && wl.table.SelectionCount() > 0 {
+			if wl.selectionMode && len(wl.table.GetSelectedRows()) > 0 {
 				wl.showBatchTerminateConfirm()
 				return nil
 			}
 		case 'C':
-			// Clear visibility query
 			if wl.visibilityQuery != "" {
 				wl.clearVisibilityQuery()
 				return nil
 			}
 		case 'L':
-			// Load saved filter
 			wl.showSavedFilters()
 			return nil
 		case 'S':
-			// Save current filter
 			if wl.visibilityQuery != "" {
 				wl.showSaveFilter()
 				return nil
 			}
 		case 'd':
-			// Diff - open diff view with current workflow
 			wl.startDiff()
 			return nil
 		}
 
-		// Ctrl+A to select all in selection mode
 		if event.Key() == tcell.KeyCtrlA && wl.selectionMode {
 			wl.table.SelectAll()
 			wl.updateSelectionPreview()
@@ -489,7 +508,6 @@ func (wl *WorkflowList) Start() {
 
 		return event
 	})
-	// Load data when view becomes active
 	wl.loadData()
 }
 
@@ -498,36 +516,28 @@ func (wl *WorkflowList) Stop() {
 	wl.table.SetInputCapture(nil)
 	wl.Flex.SetInputCapture(nil)
 	wl.stopAutoRefresh()
-	if wl.unsubscribeTheme != nil {
-		wl.unsubscribeTheme()
-	}
-	// Clean up component theme listeners to prevent memory leaks and visual glitches
-	wl.table.Destroy()
-	wl.leftPanel.Destroy()
-	wl.rightPanel.Destroy()
+	wl.app.ClearWorkflowStats()
 }
 
 // Hints returns keybinding hints for this view.
-func (wl *WorkflowList) Hints() []ui.KeyHint {
+func (wl *WorkflowList) Hints() []KeyHint {
 	if wl.selectionMode {
-		hints := []ui.KeyHint{
+		hints := []KeyHint{
 			{Key: "space", Description: "Select"},
 			{Key: "Ctrl+A", Description: "Select All"},
 			{Key: "v", Description: "Exit Select"},
 		}
-		if wl.table.SelectionCount() > 0 {
+		if len(wl.table.GetSelectedRows()) > 0 {
 			hints = append(hints,
-				ui.KeyHint{Key: "c", Description: "Cancel"},
-				ui.KeyHint{Key: "X", Description: "Terminate"},
+				KeyHint{Key: "c", Description: "Cancel"},
+				KeyHint{Key: "X", Description: "Terminate"},
 			)
 		}
-		hints = append(hints,
-			ui.KeyHint{Key: "esc", Description: "Back"},
-		)
+		hints = append(hints, KeyHint{Key: "esc", Description: "Back"})
 		return hints
 	}
 
-	hints := []ui.KeyHint{
+	hints := []KeyHint{
 		{Key: "enter", Description: "Detail"},
 		{Key: "/", Description: "Filter"},
 		{Key: "F", Description: "Query"},
@@ -536,30 +546,38 @@ func (wl *WorkflowList) Hints() []ui.KeyHint {
 	}
 	if wl.visibilityQuery != "" {
 		hints = append(hints,
-			ui.KeyHint{Key: "C", Description: "Clear Query"},
-			ui.KeyHint{Key: "S", Description: "Save Filter"},
+			KeyHint{Key: "C", Description: "Clear Query"},
+			KeyHint{Key: "S", Description: "Save Filter"},
 		)
 	}
 	hints = append(hints,
-		ui.KeyHint{Key: "L", Description: "Load Filter"},
-		ui.KeyHint{Key: "d", Description: "Diff"},
-		ui.KeyHint{Key: "v", Description: "Select Mode"},
-		ui.KeyHint{Key: "y", Description: "Copy ID"},
-		ui.KeyHint{Key: "r", Description: "Refresh"},
-		ui.KeyHint{Key: "p", Description: "Preview"},
-		ui.KeyHint{Key: "a", Description: "Auto-refresh"},
-		ui.KeyHint{Key: "t", Description: "Task Queues"},
-		ui.KeyHint{Key: "s", Description: "Schedules"},
-		ui.KeyHint{Key: "T", Description: "Theme"},
-		ui.KeyHint{Key: "?", Description: "Help"},
-		ui.KeyHint{Key: "esc", Description: "Back"},
+		KeyHint{Key: "L", Description: "Load Filter"},
+		KeyHint{Key: "d", Description: "Diff"},
+		KeyHint{Key: "v", Description: "Select Mode"},
+		KeyHint{Key: "y", Description: "Copy ID"},
+		KeyHint{Key: "r", Description: "Refresh"},
+		KeyHint{Key: "p", Description: "Preview"},
+		KeyHint{Key: "a", Description: "Auto-refresh"},
+		KeyHint{Key: "t", Description: "Task Queues"},
+		KeyHint{Key: "s", Description: "Schedules"},
+		KeyHint{Key: "T", Description: "Theme"},
+		KeyHint{Key: "?", Description: "Help"},
+		KeyHint{Key: "esc", Description: "Back"},
 	)
 	return hints
 }
 
-// Focus sets focus to the table (which has the input handlers).
+// HandleEscape implements EscapeHandler to clear filter state before navigation.
+func (wl *WorkflowList) HandleEscape() bool {
+	if wl.filterText != "" || wl.visibilityQuery != "" || wl.originalWorkflows != nil {
+		wl.clearAllFilters()
+		return true
+	}
+	return false
+}
+
+// Focus sets focus to the table.
 func (wl *WorkflowList) Focus(delegate func(p tview.Primitive)) {
-	// If showing empty state, focus the flex container instead
 	if len(wl.workflows) == 0 && len(wl.allWorkflows) == 0 {
 		delegate(wl.Flex)
 		return
@@ -569,44 +587,179 @@ func (wl *WorkflowList) Focus(delegate func(p tview.Primitive)) {
 
 // Draw applies theme colors dynamically and draws the view.
 func (wl *WorkflowList) Draw(screen tcell.Screen) {
-	bg := ui.ColorBg()
+	bg := theme.Bg()
 	wl.SetBackgroundColor(bg)
 	wl.preview.SetBackgroundColor(bg)
-	wl.preview.SetTextColor(ui.ColorFg())
+	wl.preview.SetTextColor(theme.Fg())
 	wl.Flex.Draw(screen)
 }
 
 func (wl *WorkflowList) showFilter() {
-	// Set up command bar callbacks
-	cb := wl.app.UI().CommandBar()
+	wl.originalWorkflows = wl.allWorkflows
 
-	// Live filtering as user types
-	cb.SetOnChange(func(text string) {
-		wl.filterText = text
-		wl.applyFilter()
+	wl.app.ShowFilterMode(wl.filterText, FilterModeCallbacks{
+		OnSubmit: func(text string) {
+			wl.filterText = text
+			if text != "" {
+				// Apply filter with server fallback if no local results
+				wl.applyFilterWithFallback(true)
+			} else {
+				wl.applyFilter()
+			}
+			wl.updatePanelTitle()
+		},
+		OnCancel: func() {
+			wl.closeFilter()
+		},
+		OnChange: func(text string) {
+			wl.filterText = text
+			wl.applyFilterWithServerSearch(text)
+		},
 	})
+}
 
-	cb.SetOnSubmit(func(cmd ui.CommandType, text string) {
-		wl.filterText = text
-		wl.applyFilter()
-	})
-
-	cb.SetOnCancel(func() {
-		wl.closeFilter()
-	})
-
-	// Show the command bar with filter mode
-	wl.app.UI().ShowCommandBar(ui.CommandFilter)
-
-	// Pre-fill with existing filter text if any
-	if wl.filterText != "" {
-		cb.SetText(wl.filterText)
+// applyFilterWithServerSearch filters locally, and if no results, triggers server search.
+func (wl *WorkflowList) applyFilterWithServerSearch(text string) {
+	if text == "" {
+		wl.workflows = wl.allWorkflows
+		wl.populateTable()
+		wl.updateStats()
+		wl.updateFilterTitle("", "")
+		return
 	}
+
+	// Try local filter first
+	filter := strings.ToLower(text)
+	wl.workflows = nil
+	for _, w := range wl.allWorkflows {
+		if strings.Contains(strings.ToLower(w.ID), filter) ||
+			strings.Contains(strings.ToLower(w.Type), filter) ||
+			strings.Contains(strings.ToLower(w.Status), filter) {
+			wl.workflows = append(wl.workflows, w)
+		}
+	}
+
+	// Show top match hint
+	topHint := ""
+	if len(wl.workflows) > 0 {
+		topHint = wl.workflows[0].ID
+	}
+	wl.updateFilterTitle(text, topHint)
+
+	// If no local results and query is long enough, search server
+	if len(wl.workflows) == 0 && len(text) >= 2 {
+		// Avoid duplicate requests
+		if text == wl.lastCompletionQuery {
+			return
+		}
+		wl.lastCompletionQuery = text
+		wl.searchServer(text)
+		return
+	}
+
+	wl.populateTable()
+	wl.updateStats()
+}
+
+// searchServer performs a server-side search and updates the table.
+func (wl *WorkflowList) searchServer(searchTerm string) {
+	provider := wl.app.Provider()
+	if provider == nil {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		query := fmt.Sprintf(
+			"WorkflowId STARTS_WITH '%s' OR WorkflowType STARTS_WITH '%s'",
+			searchTerm, searchTerm,
+		)
+		opts := temporal.ListOptions{
+			PageSize: 50,
+			Query:    query,
+		}
+		workflows, _, err := provider.ListWorkflows(ctx, wl.namespace, opts)
+
+		wl.app.JigApp().QueueUpdateDraw(func() {
+			// Only update if we're still filtering with the same term
+			if wl.filterText != searchTerm {
+				return
+			}
+
+			if err != nil {
+				return
+			}
+
+			wl.workflows = workflows
+			wl.serverCompletions = make([]string, 0, len(workflows))
+			for _, w := range workflows {
+				wl.serverCompletions = append(wl.serverCompletions, w.ID)
+			}
+
+			// Update hint with top server result
+			topHint := ""
+			if len(workflows) > 0 {
+				topHint = workflows[0].ID
+			}
+			wl.updateFilterTitle(searchTerm, topHint)
+
+			wl.populateTable()
+			wl.updateStats()
+		})
+	}()
+}
+
+// updateFilterTitle updates the panel title with filter info and hint.
+func (wl *WorkflowList) updateFilterTitle(filter, hint string) {
+	if filter == "" {
+		wl.leftPanel.SetTitle(fmt.Sprintf("%s Workflows", theme.IconWorkflow))
+		return
+	}
+
+	title := fmt.Sprintf("%s Workflows [%s](/%s", theme.IconWorkflow, theme.TagFgDim(), filter)
+	if hint != "" && strings.HasPrefix(strings.ToLower(hint), strings.ToLower(filter)) {
+		// Show autocomplete hint: the part after what user typed
+		suffix := hint[len(filter):]
+		if suffix != "" {
+			title += fmt.Sprintf("[%s]%s[-]", theme.TagFgMuted(), suffix)
+		}
+	}
+	title += ")[-]"
+	wl.leftPanel.SetTitle(title)
 }
 
 func (wl *WorkflowList) closeFilter() {
-	wl.app.UI().HideCommandBar()
-	wl.app.UI().SetFocus(wl.table)
+	wl.serverCompletions = nil
+	wl.lastCompletionQuery = ""
+
+	if wl.filterText == "" && wl.visibilityQuery == "" && wl.originalWorkflows != nil {
+		wl.allWorkflows = wl.originalWorkflows
+		wl.workflows = wl.originalWorkflows
+		wl.originalWorkflows = nil
+		wl.populateTable()
+		wl.updateStats()
+		wl.updatePanelTitle()
+	}
+}
+
+func (wl *WorkflowList) clearAllFilters() {
+	wl.filterText = ""
+	wl.visibilityQuery = ""
+	wl.serverCompletions = nil
+	wl.lastCompletionQuery = ""
+
+	if wl.originalWorkflows != nil {
+		wl.allWorkflows = wl.originalWorkflows
+		wl.workflows = wl.originalWorkflows
+		wl.originalWorkflows = nil
+		wl.populateTable()
+		wl.updateStats()
+		wl.updatePanelTitle()
+	} else {
+		wl.loadData()
+	}
 }
 
 func (wl *WorkflowList) copyWorkflowID() {
@@ -616,27 +769,24 @@ func (wl *WorkflowList) copyWorkflowID() {
 	}
 
 	wf := wl.workflows[row]
-	if err := ui.CopyToClipboard(wf.ID); err != nil {
-		// Show error in preview
+	if err := copyToClipboard(wf.ID); err != nil {
 		wl.preview.SetText(fmt.Sprintf("[%s]%s Failed to copy: %s[-]",
-			ui.TagFailed(), ui.IconFailed, err.Error()))
+			theme.TagError(), theme.IconError, err.Error()))
 		return
 	}
 
-	// Show success feedback in preview panel
 	wl.preview.SetText(fmt.Sprintf(`[%s::b]Copied to clipboard[-:-:-]
 
 [%s]%s[-]
 
 [%s]Workflow ID copied![-]`,
-		ui.TagPanelTitle(),
-		ui.TagAccent(), wf.ID,
-		ui.TagCompleted()))
+		theme.TagPanelTitle(),
+		theme.TagAccent(), wf.ID,
+		theme.TagSuccess()))
 
-	// Restore preview after a brief delay
 	go func() {
 		time.Sleep(1500 * time.Millisecond)
-		wl.app.UI().QueueUpdateDraw(func() {
+		wl.app.JigApp().QueueUpdateDraw(func() {
 			if row < len(wl.workflows) {
 				wl.updatePreview(wl.workflows[row])
 			}
@@ -673,26 +823,24 @@ func truncate(s string, maxLen int) string {
 func (wl *WorkflowList) toggleSelectionMode() {
 	wl.selectionMode = !wl.selectionMode
 	if wl.selectionMode {
-		wl.table.EnableSelection()
-		wl.leftPanel.SetTitle("Workflows (Select Mode)")
+		wl.table.SetMultiSelect(true)
+		wl.leftPanel.SetTitle(fmt.Sprintf("%s Workflows (Select Mode)", theme.IconWorkflow))
 	} else {
-		wl.table.DisableSelection()
-		wl.leftPanel.SetTitle("Workflows")
+		wl.table.SetMultiSelect(false)
+		wl.table.ClearSelection()
+		wl.leftPanel.SetTitle(fmt.Sprintf("%s Workflows", theme.IconWorkflow))
 	}
-	// Update hints
-	wl.app.UI().Menu().SetHints(wl.Hints())
+	wl.app.JigApp().Menu().SetHints(wl.Hints())
 }
 
 func (wl *WorkflowList) updateSelectionPreview() {
-	count := wl.table.SelectionCount()
+	count := len(wl.table.GetSelectedRows())
 	if count == 0 {
-		// Show normal preview
 		row := wl.table.SelectedRow()
 		if row >= 0 && row < len(wl.workflows) {
 			wl.updatePreview(wl.workflows[row])
 		}
 	} else {
-		// Show selection summary
 		var running, completed, failed int
 		selected := wl.table.GetSelectedRows()
 		for _, idx := range selected {
@@ -717,17 +865,16 @@ func (wl *WorkflowList) updateSelectionPreview() {
 [%s]%s Failed: %d[-]
 
 [%s]Press 'c' to cancel or 'X' to terminate selected workflows[-]`,
-			ui.TagPanelTitle(),
-			ui.TagAccent(), count,
-			ui.TagFgDim(),
-			ui.TagRunning(), ui.IconRunning, running,
-			ui.TagCompleted(), ui.IconCompleted, completed,
-			ui.TagFailed(), ui.IconFailed, failed,
-			ui.TagFgDim())
+			theme.TagPanelTitle(),
+			theme.TagAccent(), count,
+			theme.TagFgDim(),
+			theme.StatusColorTag("Running"), theme.StatusIcon("Running"), running,
+			theme.StatusColorTag("Completed"), theme.StatusIcon("Completed"), completed,
+			theme.StatusColorTag("Failed"), theme.StatusIcon("Failed"), failed,
+			theme.TagFgDim())
 		wl.preview.SetText(text)
 	}
-	// Update hints to reflect selection state
-	wl.app.UI().Menu().SetHints(wl.Hints())
+	wl.app.JigApp().Menu().SetHints(wl.Hints())
 }
 
 // Batch operation methods
@@ -738,29 +885,97 @@ func (wl *WorkflowList) showBatchCancelConfirm() {
 		return
 	}
 
-	// Build batch items
-	items := make([]ui.BatchItem, len(selected))
-	for i, idx := range selected {
-		if idx < len(wl.workflows) {
-			wf := wl.workflows[idx]
-			items[i] = ui.BatchItem{
-				ID:     wf.ID,
-				RunID:  wf.RunID,
-				Status: "pending",
-			}
+	// Count running workflows
+	var runningCount int
+	for _, idx := range selected {
+		if idx < len(wl.workflows) && wl.workflows[idx].Status == "Running" {
+			runningCount++
 		}
 	}
 
-	modal := ui.NewBatchConfirmModal(ui.BatchCancel, items)
-	modal.SetOnConfirm(func() {
-		wl.executeBatchCancel(modal, items)
-	})
-	modal.SetOnCancel(func() {
-		wl.closeModal("batch-confirm")
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Cancel %d Workflow(s)", theme.IconWarning, len(selected)),
+		Width:    60,
+		Height:   14,
+		Backdrop: true,
 	})
 
-	wl.app.UI().Pages().AddPage("batch-confirm", modal, true, true)
-	wl.app.UI().SetFocus(modal)
+	form := components.NewForm()
+	form.AddTextField("reason", "Reason (optional)", "Batch cancelled via tempo")
+
+	infoText := tview.NewTextView().SetDynamicColors(true)
+	infoText.SetBackgroundColor(theme.Bg())
+	infoText.SetText(fmt.Sprintf(`[%s]Selected:[-] %d workflow(s)
+[%s]Running:[-] %d (will be cancelled)
+[%s]Other:[-] %d (will be skipped)`,
+		theme.TagFgDim(), len(selected),
+		theme.TagAccent(), runningCount,
+		theme.TagFgDim(), len(selected)-runningCount))
+
+	content := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(infoText, 4, 0, false).
+		AddItem(form, 0, 1, true)
+	content.SetBackgroundColor(theme.Bg())
+
+	modal.SetContent(content)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter", Description: "Confirm"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		values := form.GetValues()
+		reason := values["reason"].(string)
+		wl.closeModal("batch-cancel")
+		wl.executeBatchCancel(selected, reason)
+	})
+	modal.SetOnCancel(func() {
+		wl.closeModal("batch-cancel")
+	})
+
+	wl.app.JigApp().Pages().AddPage("batch-cancel", modal, true, true)
+	wl.app.JigApp().SetFocus(form)
+}
+
+func (wl *WorkflowList) executeBatchCancel(indices []int, reason string) {
+	provider := wl.app.Provider()
+	if provider == nil {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		var succeeded, failed int
+		for _, idx := range indices {
+			if idx >= len(wl.workflows) {
+				continue
+			}
+			wf := wl.workflows[idx]
+			if wf.Status != "Running" {
+				continue
+			}
+
+			err := provider.CancelWorkflow(ctx, wl.namespace, wf.ID, wf.RunID, reason)
+			if err != nil {
+				failed++
+			} else {
+				succeeded++
+			}
+		}
+
+		wl.app.JigApp().QueueUpdateDraw(func() {
+			wl.toggleSelectionMode()
+			wl.loadData()
+			wl.preview.SetText(fmt.Sprintf(`[%s::b]Batch Cancel Complete[-:-:-]
+
+[%s]Cancelled:[-] %d workflow(s)
+[%s]Failed:[-] %d workflow(s)`,
+				theme.TagPanelTitle(),
+				theme.TagSuccess(), succeeded,
+				theme.TagError(), failed))
+		})
+	}()
 }
 
 func (wl *WorkflowList) showBatchTerminateConfirm() {
@@ -769,413 +984,389 @@ func (wl *WorkflowList) showBatchTerminateConfirm() {
 		return
 	}
 
-	// Build batch items
-	items := make([]ui.BatchItem, len(selected))
-	for i, idx := range selected {
-		if idx < len(wl.workflows) {
-			wf := wl.workflows[idx]
-			items[i] = ui.BatchItem{
-				ID:     wf.ID,
-				RunID:  wf.RunID,
-				Status: "pending",
-			}
+	// Count running workflows
+	var runningCount int
+	for _, idx := range selected {
+		if idx < len(wl.workflows) && wl.workflows[idx].Status == "Running" {
+			runningCount++
 		}
 	}
 
-	modal := ui.NewBatchConfirmModal(ui.BatchTerminate, items)
-	modal.SetOnConfirm(func() {
-		wl.executeBatchTerminate(modal, items)
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Terminate %d Workflow(s)", theme.IconError, len(selected)),
+		Width:    65,
+		Height:   16,
+		Backdrop: true,
+	})
+
+	form := components.NewForm()
+	form.AddTextField("reason", "Reason (required)", "")
+
+	warningText := tview.NewTextView().SetDynamicColors(true)
+	warningText.SetBackgroundColor(theme.Bg())
+	warningText.SetText(fmt.Sprintf(`[%s]⚠ WARNING: This action cannot be undone![-]
+
+[%s]Selected:[-] %d workflow(s)
+[%s]Running:[-] %d (will be terminated)
+[%s]Other:[-] %d (will be skipped)`,
+		theme.TagError(),
+		theme.TagFgDim(), len(selected),
+		theme.TagAccent(), runningCount,
+		theme.TagFgDim(), len(selected)-runningCount))
+
+	content := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(warningText, 5, 0, false).
+		AddItem(form, 0, 1, true)
+	content.SetBackgroundColor(theme.Bg())
+
+	modal.SetContent(content)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter", Description: "Terminate"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		values := form.GetValues()
+		reason := values["reason"].(string)
+		if reason == "" {
+			return // Require reason for terminate
+		}
+		wl.closeModal("batch-terminate")
+		wl.executeBatchTerminate(selected, reason)
 	})
 	modal.SetOnCancel(func() {
-		wl.closeModal("batch-confirm")
+		wl.closeModal("batch-terminate")
 	})
 
-	wl.app.UI().Pages().AddPage("batch-confirm", modal, true, true)
-	wl.app.UI().SetFocus(modal)
+	wl.app.JigApp().Pages().AddPage("batch-terminate", modal, true, true)
+	wl.app.JigApp().SetFocus(form)
 }
 
-func (wl *WorkflowList) executeBatchCancel(modal *ui.BatchConfirmModal, items []ui.BatchItem) {
+func (wl *WorkflowList) executeBatchTerminate(indices []int, reason string) {
 	provider := wl.app.Provider()
 	if provider == nil {
-		wl.closeModal("batch-confirm")
 		return
 	}
 
-	modal.StartProgress()
-
 	go func() {
-		// Build workflow identifiers
-		workflows := make([]temporal.WorkflowIdentifier, len(items))
-		for i, item := range items {
-			workflows[i] = temporal.WorkflowIdentifier{
-				WorkflowID: item.ID,
-				RunID:      item.RunID,
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		var succeeded, failed int
+		for _, idx := range indices {
+			if idx >= len(wl.workflows) {
+				continue
+			}
+			wf := wl.workflows[idx]
+			if wf.Status != "Running" {
+				continue
+			}
+
+			err := provider.TerminateWorkflow(ctx, wl.namespace, wf.ID, wf.RunID, reason)
+			if err != nil {
+				failed++
+			} else {
+				succeeded++
 			}
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-
-		// Execute batch cancel
-		results, _ := provider.CancelWorkflows(ctx, wl.namespace, workflows)
-
-		// Update modal with results
-		for i, result := range results {
-			wl.app.UI().QueueUpdateDraw(func() {
-				if result.Success {
-					modal.MarkItemCompleted(i)
-				} else {
-					modal.MarkItemFailed(i, result.Error)
-				}
-			})
-			// Small delay for visual feedback
-			time.Sleep(100 * time.Millisecond)
-		}
-
-		// After completion, refresh the workflow list
-		wl.app.UI().QueueUpdateDraw(func() {
+		wl.app.JigApp().QueueUpdateDraw(func() {
+			wl.toggleSelectionMode()
 			wl.loadData()
-			wl.table.ClearSelection()
-		})
-	}()
-}
+			wl.preview.SetText(fmt.Sprintf(`[%s::b]Batch Terminate Complete[-:-:-]
 
-func (wl *WorkflowList) executeBatchTerminate(modal *ui.BatchConfirmModal, items []ui.BatchItem) {
-	provider := wl.app.Provider()
-	if provider == nil {
-		wl.closeModal("batch-confirm")
-		return
-	}
-
-	modal.StartProgress()
-
-	go func() {
-		// Build workflow identifiers
-		workflows := make([]temporal.WorkflowIdentifier, len(items))
-		for i, item := range items {
-			workflows[i] = temporal.WorkflowIdentifier{
-				WorkflowID: item.ID,
-				RunID:      item.RunID,
-			}
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-
-		// Execute batch terminate
-		results, _ := provider.TerminateWorkflows(ctx, wl.namespace, workflows, "Terminated via TUI batch operation")
-
-		// Update modal with results
-		for i, result := range results {
-			wl.app.UI().QueueUpdateDraw(func() {
-				if result.Success {
-					modal.MarkItemCompleted(i)
-				} else {
-					modal.MarkItemFailed(i, result.Error)
-				}
-			})
-			// Small delay for visual feedback
-			time.Sleep(100 * time.Millisecond)
-		}
-
-		// After completion, refresh the workflow list
-		wl.app.UI().QueueUpdateDraw(func() {
-			wl.loadData()
-			wl.table.ClearSelection()
+[%s]Terminated:[-] %d workflow(s)
+[%s]Failed:[-] %d workflow(s)`,
+				theme.TagPanelTitle(),
+				theme.TagSuccess(), succeeded,
+				theme.TagError(), failed))
 		})
 	}()
 }
 
 func (wl *WorkflowList) closeModal(name string) {
-	wl.app.UI().Pages().RemovePage(name)
-	if current := wl.app.UI().Pages().Current(); current != nil {
-		wl.app.UI().SetFocus(current)
-	}
+	wl.app.JigApp().Pages().RemovePage(name)
+	wl.app.JigApp().SetFocus(wl.table)
 }
 
 // Visibility query methods
 
 func (wl *WorkflowList) showVisibilityQuery() {
-	autocomplete := ui.NewAutocompleteInput()
-
-	// Pre-fill with existing query if any
-	if wl.visibilityQuery != "" {
-		autocomplete.SetText(wl.visibilityQuery)
-	}
-
-	// Set up history navigation
-	autocomplete.SetHistoryProvider(func(direction int) string {
-		if direction < 0 {
-			return wl.historyPrevious()
-		}
-		return wl.historyNext()
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Visibility Query", theme.IconSearch),
+		Width:    70,
+		Height:   16,
+		Backdrop: true,
 	})
 
-	autocomplete.SetOnSubmit(func(text string) {
-		wl.closeVisibilityQuery()
-		wl.visibilityQuery = text
-		wl.addToHistory(text) // Add to history
-		wl.filterText = ""    // Clear local filter when using visibility query
-		wl.updatePanelTitle()
-		wl.loadData() // Reload with new query
+	form := components.NewForm()
+	form.AddTextField("query", "Query", wl.visibilityQuery)
+
+	helpText := tview.NewTextView().SetDynamicColors(true)
+	helpText.SetBackgroundColor(theme.Bg())
+	helpText.SetText(fmt.Sprintf(`[%s]Examples:[-]
+  WorkflowType = 'OrderWorkflow'
+  ExecutionStatus = 'Running'
+  StartTime > '2024-01-01T00:00:00Z'
+  WorkflowId STARTS_WITH 'order-'`,
+		theme.TagFgDim()))
+
+	content := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(form, 3, 0, true).
+		AddItem(helpText, 0, 1, false)
+	content.SetBackgroundColor(theme.Bg())
+
+	form.SetOnSubmit(func(values map[string]any) {
+		query := values["query"].(string)
+		wl.closeModal("visibility-query")
+		wl.applyVisibilityQuery(query)
+	})
+	form.SetOnCancel(func() {
+		wl.closeModal("visibility-query")
 	})
 
-	autocomplete.SetOnCancel(func() {
-		wl.closeVisibilityQuery()
-		wl.historyIndex = -1 // Reset history browsing
+	modal.SetContent(content)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter", Description: "Apply"},
+		{Key: "Esc", Description: "Cancel"},
 	})
-
-	// Create a centered container for the autocomplete
-	height := 12 // Base height + room for suggestions
-	flex := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().
-			AddItem(nil, 0, 1, false).
-			AddItem(autocomplete, 80, 0, true).
-			AddItem(nil, 0, 1, false),
-			height, 0, true).
-		AddItem(nil, 0, 1, false)
-	flex.SetBackgroundColor(ui.ColorBgDark())
-
-	wl.app.UI().Pages().AddPage("visibility-query", flex, true, true)
-	wl.app.UI().SetFocus(autocomplete)
-}
-
-func (wl *WorkflowList) closeVisibilityQuery() {
-	wl.app.UI().Pages().RemovePage("visibility-query")
-	wl.app.UI().SetFocus(wl.table)
-}
-
-func (wl *WorkflowList) showQueryTemplates() {
-	selector := ui.NewQueryTemplateSelector(ui.DefaultQueryTemplates)
-
-	selector.SetOnSelect(func(template ui.QueryTemplate) {
-		wl.closeQueryTemplates()
-
-		// Check if template has placeholder
-		if strings.Contains(template.Query, "${") {
-			// Show input for placeholder value
-			wl.showTemplateInput(template)
-		} else {
-			wl.visibilityQuery = template.Query
-			wl.filterText = ""
-			wl.updatePanelTitle()
-			wl.loadData()
-		}
+	modal.SetOnSubmit(func() {
+		values := form.GetValues()
+		query := values["query"].(string)
+		wl.closeModal("visibility-query")
+		wl.applyVisibilityQuery(query)
 	})
-
-	selector.SetOnCancel(func() {
-		wl.closeQueryTemplates()
-	})
-
-	// Create a centered modal for the selector
-	height := len(ui.DefaultQueryTemplates) + 4
-	flex := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().
-			AddItem(nil, 0, 1, false).
-			AddItem(selector, 70, 0, true).
-			AddItem(nil, 0, 1, false),
-			height, 0, true).
-		AddItem(nil, 0, 1, false)
-	flex.SetBackgroundColor(ui.ColorBgDark())
-
-	wl.app.UI().Pages().AddPage("query-templates", flex, true, true)
-	wl.app.UI().SetFocus(selector)
-}
-
-func (wl *WorkflowList) closeQueryTemplates() {
-	wl.app.UI().Pages().RemovePage("query-templates")
-	wl.app.UI().SetFocus(wl.table)
-}
-
-func (wl *WorkflowList) showTemplateInput(template ui.QueryTemplate) {
-	// Extract placeholder name (e.g., ${type} -> type)
-	query := template.Query
-	placeholder := ""
-	start := strings.Index(query, "${")
-	end := strings.Index(query, "}")
-	if start >= 0 && end > start {
-		placeholder = query[start+2 : end]
-	}
-
-	modal := ui.NewInputModal("Query Value", fmt.Sprintf("Enter value for %s:", placeholder), []ui.InputField{
-		{Name: "value", Label: placeholder, Placeholder: "e.g., OrderWorkflow", Required: true},
-	})
-
-	modal.SetOnSubmit(func(values map[string]string) {
-		wl.closeTemplateInput()
-		value := values["value"]
-		// Replace placeholder in query
-		wl.visibilityQuery = strings.Replace(query, "${"+placeholder+"}", "'"+value+"'", 1)
-		wl.filterText = ""
-		wl.updatePanelTitle()
-		wl.loadData()
-	})
-
 	modal.SetOnCancel(func() {
-		wl.closeTemplateInput()
+		wl.closeModal("visibility-query")
 	})
 
-	wl.app.UI().Pages().AddPage("template-input", modal, true, true)
-	wl.app.UI().SetFocus(modal)
+	wl.app.JigApp().Pages().AddPage("visibility-query", modal, true, true)
+	wl.app.JigApp().SetFocus(form)
 }
 
-func (wl *WorkflowList) closeTemplateInput() {
-	wl.app.UI().Pages().RemovePage("template-input")
-	wl.app.UI().SetFocus(wl.table)
-}
-
-func (wl *WorkflowList) updatePanelTitle() {
-	title := "Workflows"
-	if wl.visibilityQuery != "" {
-		// Show truncated query in title
-		q := wl.visibilityQuery
-		if len(q) > 40 {
-			q = q[:37] + "..."
-		}
-		title = fmt.Sprintf("Workflows [%s](%s)[-]", ui.TagAccent(), q)
-	} else if wl.filterText != "" {
-		title = fmt.Sprintf("Workflows [%s](/%s)[-]", ui.TagFgDim(), wl.filterText)
+func (wl *WorkflowList) applyVisibilityQuery(query string) {
+	if query != "" && query != wl.visibilityQuery {
+		wl.addToHistory(query)
 	}
-	wl.leftPanel.SetTitle(title)
-}
-
-func (wl *WorkflowList) clearVisibilityQuery() {
-	wl.visibilityQuery = ""
+	wl.visibilityQuery = query
+	wl.filterText = ""
 	wl.updatePanelTitle()
 	wl.loadData()
 }
 
-// Date range picker methods
+func (wl *WorkflowList) addToHistory(query string) {
+	// Don't add duplicates of the most recent
+	if len(wl.searchHistory) > 0 && wl.searchHistory[len(wl.searchHistory)-1] == query {
+		return
+	}
+	wl.searchHistory = append(wl.searchHistory, query)
+	if len(wl.searchHistory) > wl.maxHistorySize {
+		wl.searchHistory = wl.searchHistory[1:]
+	}
+	wl.historyIndex = -1
+}
+
+func (wl *WorkflowList) showQueryTemplates() {
+	templates := []struct {
+		name  string
+		query string
+	}{
+		{"Running Workflows", "ExecutionStatus = 'Running'"},
+		{"Failed Workflows", "ExecutionStatus = 'Failed'"},
+		{"Completed Workflows", "ExecutionStatus = 'Completed'"},
+		{"Cancelled Workflows", "ExecutionStatus = 'Canceled'"},
+		{"Timed Out Workflows", "ExecutionStatus = 'TimedOut'"},
+		{"Started Today", "StartTime > $TODAY"},
+		{"Started This Hour", "StartTime > $HOUR_AGO"},
+		{"Long Running (>1h)", "ExecutionStatus = 'Running' AND StartTime < $HOUR_AGO"},
+	}
+
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Query Templates", theme.IconInfo),
+		Width:    60,
+		Height:   18,
+		Backdrop: true,
+	})
+
+	table := components.NewTable()
+	table.SetHeaders("TEMPLATE", "QUERY")
+	table.SetBorder(false)
+
+	for _, t := range templates {
+		table.AddRow(t.name, truncate(t.query, 35))
+	}
+	table.SelectRow(0)
+
+	table.SetOnSelect(func(row int) {
+		if row >= 0 && row < len(templates) {
+			wl.closeModal("query-templates")
+			wl.applyVisibilityQuery(templates[row].query)
+		}
+	})
+
+	modal.SetContent(table)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter", Description: "Apply"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnCancel(func() {
+		wl.closeModal("query-templates")
+	})
+
+	wl.app.JigApp().Pages().AddPage("query-templates", modal, true, true)
+	wl.app.JigApp().SetFocus(table)
+}
 
 func (wl *WorkflowList) showDateRangePicker() {
-	picker := ui.NewDateRangePicker()
-
-	picker.SetOnSelect(func(query string) {
-		wl.closeDateRangePicker()
-		if query != "" {
-			// Combine with existing query or set as new
-			if wl.visibilityQuery != "" && !strings.Contains(wl.visibilityQuery, "StartTime") && !strings.Contains(wl.visibilityQuery, "CloseTime") {
-				wl.visibilityQuery = wl.visibilityQuery + " AND " + query
-			} else {
-				wl.visibilityQuery = query
-			}
-		} else {
-			// "All time" selected - clear date-related query parts
-			wl.clearDateFromQuery()
-		}
-		wl.filterText = ""
-		wl.updatePanelTitle()
-		wl.loadData()
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Date Range Filter", theme.IconInfo),
+		Width:    55,
+		Height:   14,
+		Backdrop: true,
 	})
 
-	picker.SetOnCancel(func() {
-		wl.closeDateRangePicker()
-	})
-
-	// Create centered modal
-	height := picker.GetHeight()
-	flex := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().
-			AddItem(nil, 0, 1, false).
-			AddItem(picker, 55, 0, true).
-			AddItem(nil, 0, 1, false),
-			height, 0, true).
-		AddItem(nil, 0, 1, false)
-	flex.SetBackgroundColor(ui.ColorBgDark())
-
-	wl.app.UI().Pages().AddPage("date-range", flex, true, true)
-	wl.app.UI().SetFocus(picker)
-}
-
-func (wl *WorkflowList) closeDateRangePicker() {
-	wl.app.UI().Pages().RemovePage("date-range")
-	wl.app.UI().SetFocus(wl.table)
-}
-
-func (wl *WorkflowList) clearDateFromQuery() {
-	// Remove StartTime and CloseTime conditions from visibility query
-	// This is a simple implementation - a full parser would be more robust
-	parts := strings.Split(wl.visibilityQuery, " AND ")
-	var filtered []string
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if !strings.Contains(part, "StartTime") && !strings.Contains(part, "CloseTime") {
-			filtered = append(filtered, part)
-		}
+	presets := []string{
+		"Last Hour",
+		"Last 24 Hours",
+		"Last 7 Days",
+		"Last 30 Days",
+		"Today",
+		"Yesterday",
 	}
-	wl.visibilityQuery = strings.Join(filtered, " AND ")
+
+	form := components.NewForm()
+	form.AddSelect("preset", "Time Range", presets)
+
+	form.SetOnSubmit(func(values map[string]any) {
+		preset := values["preset"].(string)
+		wl.closeModal("date-range")
+		wl.applyDatePreset(preset)
+	})
+	form.SetOnCancel(func() {
+		wl.closeModal("date-range")
+	})
+
+	modal.SetContent(form)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter", Description: "Apply"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		values := form.GetValues()
+		preset := values["preset"].(string)
+		wl.closeModal("date-range")
+		wl.applyDatePreset(preset)
+	})
+	modal.SetOnCancel(func() {
+		wl.closeModal("date-range")
+	})
+
+	wl.app.JigApp().Pages().AddPage("date-range", modal, true, true)
+	wl.app.JigApp().SetFocus(form)
 }
 
-// Saved filter methods
+func (wl *WorkflowList) applyDatePreset(preset string) {
+	now := time.Now()
+	var startTime time.Time
 
-func (wl *WorkflowList) showSavedFilters() {
-	cfg := wl.app.Config()
-	if cfg == nil {
+	switch preset {
+	case "Last Hour":
+		startTime = now.Add(-1 * time.Hour)
+	case "Last 24 Hours":
+		startTime = now.Add(-24 * time.Hour)
+	case "Last 7 Days":
+		startTime = now.Add(-7 * 24 * time.Hour)
+	case "Last 30 Days":
+		startTime = now.Add(-30 * 24 * time.Hour)
+	case "Today":
+		startTime = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	case "Yesterday":
+		yesterday := now.Add(-24 * time.Hour)
+		startTime = time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, now.Location())
+	default:
 		return
 	}
 
-	filters := cfg.GetSavedFilters()
-	picker := ui.NewFilterPicker(filters, wl.visibilityQuery)
-
-	picker.SetOnSelect(func(filter config.SavedFilter) {
-		wl.closeSavedFilters()
-		wl.visibilityQuery = filter.Query
-		wl.filterText = ""
-		wl.updatePanelTitle()
-		wl.loadData()
-	})
-
-	picker.SetOnSave(func(name, query string, isDefault bool) {
-		wl.closeSavedFilters()
-		cfg.SaveFilter(config.SavedFilter{
-			Name:      name,
-			Query:     query,
-			IsDefault: isDefault,
-		})
-		_ = cfg.Save()
-	})
-
-	picker.SetOnDelete(func(name string) {
-		_ = cfg.DeleteFilter(name)
-		_ = cfg.Save()
-		picker.UpdateFilters(cfg.GetSavedFilters())
-	})
-
-	picker.SetOnSetDefault(func(name string) {
-		_ = cfg.SetDefaultFilter(name)
-		_ = cfg.Save()
-		picker.UpdateFilters(cfg.GetSavedFilters())
-	})
-
-	picker.SetOnCancel(func() {
-		wl.closeSavedFilters()
-	})
-
-	// Create centered modal
-	height := picker.GetHeight()
-	if height < 10 {
-		height = 10
-	}
-	flex := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().
-			AddItem(nil, 0, 1, false).
-			AddItem(picker, 70, 0, true).
-			AddItem(nil, 0, 1, false),
-			height, 0, true).
-		AddItem(nil, 0, 1, false)
-	flex.SetBackgroundColor(ui.ColorBgDark())
-
-	wl.app.UI().Pages().AddPage("saved-filters", flex, true, true)
-	wl.app.UI().SetFocus(picker)
+	query := fmt.Sprintf("StartTime > '%s'", startTime.UTC().Format(time.RFC3339))
+	wl.applyVisibilityQuery(query)
 }
 
-func (wl *WorkflowList) closeSavedFilters() {
-	wl.app.UI().Pages().RemovePage("saved-filters")
-	wl.app.UI().SetFocus(wl.table)
+func (wl *WorkflowList) showSavedFilters() {
+	// For now, show history as "saved" filters
+	if len(wl.searchHistory) == 0 {
+		wl.showNoSavedFilters()
+		return
+	}
+
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Query History", theme.IconInfo),
+		Width:    70,
+		Height:   18,
+		Backdrop: true,
+	})
+
+	table := components.NewTable()
+	table.SetHeaders("#", "QUERY")
+	table.SetBorder(false)
+
+	// Show most recent first
+	for i := len(wl.searchHistory) - 1; i >= 0; i-- {
+		table.AddRow(
+			fmt.Sprintf("%d", len(wl.searchHistory)-i),
+			truncate(wl.searchHistory[i], 55),
+		)
+	}
+	table.SelectRow(0)
+
+	table.SetOnSelect(func(row int) {
+		// Convert display row to history index (most recent first)
+		historyIdx := len(wl.searchHistory) - 1 - row
+		if historyIdx >= 0 && historyIdx < len(wl.searchHistory) {
+			wl.closeModal("saved-filters")
+			wl.applyVisibilityQuery(wl.searchHistory[historyIdx])
+		}
+	})
+
+	modal.SetContent(table)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter", Description: "Apply"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnCancel(func() {
+		wl.closeModal("saved-filters")
+	})
+
+	wl.app.JigApp().Pages().AddPage("saved-filters", modal, true, true)
+	wl.app.JigApp().SetFocus(table)
+}
+
+func (wl *WorkflowList) showNoSavedFilters() {
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Query History", theme.IconInfo),
+		Width:    50,
+		Height:   10,
+		Backdrop: true,
+	})
+
+	text := tview.NewTextView().SetDynamicColors(true)
+	text.SetBackgroundColor(theme.Bg())
+	text.SetTextAlign(tview.AlignCenter)
+	text.SetText(fmt.Sprintf(`[%s]No query history yet.[-]
+
+[%s]Use 'F' to enter a visibility query.
+Your queries will be saved here.[-]`,
+		theme.TagFgDim(),
+		theme.TagFg()))
+
+	modal.SetContent(text)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Esc", Description: "Close"},
+	})
+	modal.SetOnCancel(func() {
+		wl.closeModal("saved-filters")
+	})
+
+	wl.app.JigApp().Pages().AddPage("saved-filters", modal, true, true)
+	wl.app.JigApp().SetFocus(modal)
 }
 
 func (wl *WorkflowList) showSaveFilter() {
@@ -1183,120 +1374,128 @@ func (wl *WorkflowList) showSaveFilter() {
 		return
 	}
 
-	dialog := ui.NewQuickSaveDialog(wl.visibilityQuery)
-
-	dialog.SetOnSave(func(name string, isDefault bool) {
-		wl.closeSaveFilter()
-		cfg := wl.app.Config()
-		if cfg != nil {
-			cfg.SaveFilter(config.SavedFilter{
-				Name:      name,
-				Query:     wl.visibilityQuery,
-				IsDefault: isDefault,
-			})
-			_ = cfg.Save()
-		}
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Save Filter", theme.IconInfo),
+		Width:    60,
+		Height:   12,
+		Backdrop: true,
 	})
 
-	dialog.SetOnCancel(func() {
-		wl.closeSaveFilter()
+	form := components.NewForm()
+	form.AddTextField("name", "Filter Name", "")
+
+	queryText := tview.NewTextView().SetDynamicColors(true)
+	queryText.SetBackgroundColor(theme.Bg())
+	queryText.SetText(fmt.Sprintf("[%s]Query:[-] %s", theme.TagFgDim(), wl.visibilityQuery))
+
+	content := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(queryText, 2, 0, false).
+		AddItem(form, 0, 1, true)
+	content.SetBackgroundColor(theme.Bg())
+
+	form.SetOnSubmit(func(values map[string]any) {
+		// For now, just add to history (persistent save would require config storage)
+		wl.addToHistory(wl.visibilityQuery)
+		wl.closeModal("save-filter")
+	})
+	form.SetOnCancel(func() {
+		wl.closeModal("save-filter")
 	})
 
-	wl.app.UI().Pages().AddPage("save-filter", dialog, true, true)
-	wl.app.UI().SetFocus(dialog)
+	modal.SetContent(content)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter", Description: "Save"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		wl.addToHistory(wl.visibilityQuery)
+		wl.closeModal("save-filter")
+	})
+	modal.SetOnCancel(func() {
+		wl.closeModal("save-filter")
+	})
+
+	wl.app.JigApp().Pages().AddPage("save-filter", modal, true, true)
+	wl.app.JigApp().SetFocus(form)
 }
 
-func (wl *WorkflowList) closeSaveFilter() {
-	wl.app.UI().Pages().RemovePage("save-filter")
-	wl.app.UI().SetFocus(wl.table)
+func (wl *WorkflowList) clearVisibilityQuery() {
+	wl.visibilityQuery = ""
+	wl.updatePanelTitle()
+	wl.loadData()
+	wl.app.JigApp().Menu().SetHints(wl.Hints())
 }
 
-// Search history methods
-
-// addToHistory adds a query to the search history.
-func (wl *WorkflowList) addToHistory(query string) {
-	if query == "" {
-		return
-	}
-
-	// Don't add duplicates if same as last entry
-	if len(wl.searchHistory) > 0 && wl.searchHistory[len(wl.searchHistory)-1] == query {
-		return
-	}
-
-	// Remove if already exists elsewhere in history
-	for i, h := range wl.searchHistory {
-		if h == query {
-			wl.searchHistory = append(wl.searchHistory[:i], wl.searchHistory[i+1:]...)
-			break
+func (wl *WorkflowList) updatePanelTitle() {
+	title := fmt.Sprintf("%s Workflows", theme.IconWorkflow)
+	if wl.visibilityQuery != "" {
+		q := wl.visibilityQuery
+		if len(q) > 40 {
+			q = q[:37] + "..."
 		}
+		title = fmt.Sprintf("%s Workflows [%s](%s)[-]", theme.IconWorkflow, theme.TagAccent(), q)
+	} else if wl.filterText != "" {
+		title = fmt.Sprintf("%s Workflows [%s](/%s)[-]", theme.IconWorkflow, theme.TagFgDim(), wl.filterText)
 	}
-
-	// Add to end
-	wl.searchHistory = append(wl.searchHistory, query)
-
-	// Trim if too large
-	if len(wl.searchHistory) > wl.maxHistorySize {
-		wl.searchHistory = wl.searchHistory[1:]
-	}
-
-	// Reset history browsing position
-	wl.historyIndex = -1
-}
-
-// historyPrevious moves to the previous history entry.
-func (wl *WorkflowList) historyPrevious() string {
-	if len(wl.searchHistory) == 0 {
-		return wl.visibilityQuery
-	}
-
-	if wl.historyIndex == -1 {
-		// Start from the end
-		wl.historyIndex = len(wl.searchHistory) - 1
-	} else if wl.historyIndex > 0 {
-		wl.historyIndex--
-	}
-
-	return wl.searchHistory[wl.historyIndex]
-}
-
-// historyNext moves to the next history entry.
-func (wl *WorkflowList) historyNext() string {
-	if len(wl.searchHistory) == 0 || wl.historyIndex == -1 {
-		return wl.visibilityQuery
-	}
-
-	if wl.historyIndex < len(wl.searchHistory)-1 {
-		wl.historyIndex++
-		return wl.searchHistory[wl.historyIndex]
-	}
-
-	// Past the end - return to current query
-	wl.historyIndex = -1
-	return ""
-}
-
-// getHistoryStatus returns a string describing the current history position.
-func (wl *WorkflowList) getHistoryStatus() string {
-	if len(wl.searchHistory) == 0 {
-		return ""
-	}
-	if wl.historyIndex == -1 {
-		return fmt.Sprintf("(%d saved)", len(wl.searchHistory))
-	}
-	return fmt.Sprintf("(%d/%d)", wl.historyIndex+1, len(wl.searchHistory))
+	wl.leftPanel.SetTitle(title)
 }
 
 // Diff methods
-
 func (wl *WorkflowList) startDiff() {
 	row := wl.table.SelectedRow()
 	if row < 0 || row >= len(wl.workflows) {
-		// No workflow selected, open empty diff view
 		wl.app.NavigateToWorkflowDiffEmpty()
 		return
 	}
 
 	wf := wl.workflows[row]
 	wl.app.NavigateToWorkflowDiff(&wf, nil)
+}
+
+// Helper functions moved from ui package
+func resolveTimePlaceholders(query string) string {
+	// Simple placeholder resolution - can be expanded
+	return query
+}
+
+func copyToClipboard(text string) error {
+	// Use OS-specific clipboard commands
+	var cmd *exec.Cmd
+
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("pbcopy")
+	case "linux":
+		// Try xclip first, fall back to xsel
+		if _, err := exec.LookPath("xclip"); err == nil {
+			cmd = exec.Command("xclip", "-selection", "clipboard")
+		} else if _, err := exec.LookPath("xsel"); err == nil {
+			cmd = exec.Command("xsel", "--clipboard", "--input")
+		} else {
+			return fmt.Errorf("clipboard not available: install xclip or xsel")
+		}
+	case "windows":
+		cmd = exec.Command("clip")
+	default:
+		return fmt.Errorf("clipboard not supported on %s", runtime.GOOS)
+	}
+
+	pipe, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	if _, err := pipe.Write([]byte(text)); err != nil {
+		return err
+	}
+
+	if err := pipe.Close(); err != nil {
+		return err
+	}
+
+	return cmd.Wait()
 }

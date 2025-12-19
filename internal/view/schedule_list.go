@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/atterpac/loom/internal/config"
-	"github.com/atterpac/loom/internal/temporal"
-	"github.com/atterpac/loom/internal/ui"
+	"github.com/atterpac/jig/components"
+	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/tempo/internal/temporal"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -15,16 +15,15 @@ import (
 // ScheduleList displays a list of schedules with actions.
 type ScheduleList struct {
 	*tview.Flex
-	app              *App
-	namespace        string
-	table            *ui.Table
-	leftPanel        *ui.Panel
-	rightPanel       *ui.Panel
-	preview          *tview.TextView
-	schedules        []temporal.Schedule
-	loading          bool
-	showPreview      bool
-	unsubscribeTheme func()
+	app         *App
+	namespace   string
+	table       *components.Table
+	leftPanel   *components.Panel
+	rightPanel  *components.Panel
+	preview     *tview.TextView
+	schedules   []temporal.Schedule
+	loading     bool
+	showPreview bool
 }
 
 // NewScheduleList creates a new schedule list view.
@@ -33,7 +32,7 @@ func NewScheduleList(app *App, namespace string) *ScheduleList {
 		Flex:        tview.NewFlex().SetDirection(tview.FlexColumn),
 		app:         app,
 		namespace:   namespace,
-		table:       ui.NewTable(),
+		table:       components.NewTable(),
 		preview:     tview.NewTextView(),
 		schedules:   []temporal.Schedule{},
 		showPreview: true,
@@ -45,36 +44,26 @@ func NewScheduleList(app *App, namespace string) *ScheduleList {
 func (sl *ScheduleList) setup() {
 	sl.table.SetHeaders("SCHEDULE ID", "WORKFLOW TYPE", "SPEC", "STATUS", "NEXT RUN")
 	sl.table.SetBorder(false)
-	sl.table.SetBackgroundColor(ui.ColorBg())
-	sl.SetBackgroundColor(ui.ColorBg())
+	sl.table.SetBackgroundColor(theme.Bg())
+	sl.SetBackgroundColor(theme.Bg())
 
 	// Configure preview
 	sl.preview.SetDynamicColors(true)
-	sl.preview.SetBackgroundColor(ui.ColorBg())
-	sl.preview.SetTextColor(ui.ColorFg())
+	sl.preview.SetBackgroundColor(theme.Bg())
+	sl.preview.SetTextColor(theme.Fg())
 	sl.preview.SetWordWrap(true)
 
-	// Create panels
-	sl.leftPanel = ui.NewPanel("Schedules")
+	// Create panels with icons (blubber pattern)
+	sl.leftPanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Schedules", theme.IconSchedule))
 	sl.leftPanel.SetContent(sl.table)
 
-	sl.rightPanel = ui.NewPanel("Preview")
+	sl.rightPanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Preview", theme.IconInfo))
 	sl.rightPanel.SetContent(sl.preview)
 
 	// Selection change handler to update preview
 	sl.table.SetSelectionChangedFunc(func(row, col int) {
 		if row > 0 && row-1 < len(sl.schedules) {
 			sl.updatePreview(sl.schedules[row-1])
-		}
-	})
-
-	// Register for theme changes
-	sl.unsubscribeTheme = ui.OnThemeChange(func(_ *config.ParsedTheme) {
-		sl.SetBackgroundColor(ui.ColorBg())
-		sl.preview.SetBackgroundColor(ui.ColorBg())
-		sl.preview.SetTextColor(ui.ColorFg())
-		if len(sl.schedules) > 0 {
-			sl.populateTable()
 		}
 	})
 
@@ -96,12 +85,30 @@ func (sl *ScheduleList) togglePreview() {
 	sl.buildLayout()
 }
 
+// RefreshTheme updates all component colors after a theme change.
+func (sl *ScheduleList) RefreshTheme() {
+	bg := theme.Bg()
+
+	// Update main container
+	sl.SetBackgroundColor(bg)
+
+	// Update table
+	sl.table.SetBackgroundColor(bg)
+
+	// Update preview
+	sl.preview.SetBackgroundColor(bg)
+	sl.preview.SetTextColor(theme.Fg())
+
+	// Re-render table with new theme colors
+	sl.populateTable()
+}
+
 func (sl *ScheduleList) updatePreview(s temporal.Schedule) {
 	pauseStatus := "Active"
-	pauseColor := ui.TagCompleted()
+	pauseColor := theme.StatusColorTag("Completed")
 	if s.Paused {
 		pauseStatus = "Paused"
-		pauseColor = ui.TagCanceled()
+		pauseColor = theme.StatusColorTag("Canceled")
 	}
 
 	nextRun := "-"
@@ -137,22 +144,22 @@ func (sl *ScheduleList) updatePreview(s temporal.Schedule) {
 
 [%s]Notes[-]
 [%s]%s[-]`,
-		ui.TagPanelTitle(),
-		ui.TagFg(), s.ID,
-		ui.TagFgDim(),
+		theme.TagAccent(),
+		theme.TagFg(), s.ID,
+		theme.TagFgDim(),
 		pauseColor, pauseStatus,
-		ui.TagFgDim(),
-		ui.TagFg(), s.WorkflowType,
-		ui.TagFgDim(),
-		ui.TagFg(), s.Spec,
-		ui.TagFgDim(),
-		ui.TagFg(), nextRun,
-		ui.TagFgDim(),
-		ui.TagFg(), lastRun,
-		ui.TagFgDim(),
-		ui.TagFg(), s.TotalActions,
-		ui.TagFgDim(),
-		ui.TagFgDim(), s.Notes,
+		theme.TagFgDim(),
+		theme.TagFg(), s.WorkflowType,
+		theme.TagFgDim(),
+		theme.TagFg(), s.Spec,
+		theme.TagFgDim(),
+		theme.TagFg(), nextRun,
+		theme.TagFgDim(),
+		theme.TagFg(), lastRun,
+		theme.TagFgDim(),
+		theme.TagFg(), s.TotalActions,
+		theme.TagFgDim(),
+		theme.TagFgDim(), s.Notes,
 	)
 	sl.preview.SetText(text)
 }
@@ -171,7 +178,7 @@ func (sl *ScheduleList) loadData() {
 
 		schedules, _, err := provider.ListSchedules(ctx, sl.namespace, temporal.ListOptions{PageSize: 100})
 
-		sl.app.UI().QueueUpdateDraw(func() {
+		sl.app.JigApp().QueueUpdateDraw(func() {
 			sl.loading = false
 			if err != nil {
 				sl.showError(err)
@@ -231,10 +238,10 @@ func (sl *ScheduleList) populateTable() {
 
 	for _, s := range sl.schedules {
 		status := "Active"
-		statusColor := ui.ColorCompleted()
+		statusColor := theme.StatusColor("Completed")
 		if s.Paused {
 			status = "Paused"
-			statusColor = ui.ColorCanceled()
+			statusColor = theme.StatusColor("Canceled")
 		}
 
 		nextRun := "-"
@@ -242,7 +249,7 @@ func (sl *ScheduleList) populateTable() {
 			nextRun = formatRelativeTime(time.Now(), *s.NextRunTime)
 		}
 
-		sl.table.AddColoredRow(statusColor,
+		sl.table.AddRowWithColor(statusColor,
 			truncate(s.ID, 20),
 			truncate(s.WorkflowType, 20),
 			truncate(s.Spec, 15),
@@ -268,8 +275,8 @@ func (sl *ScheduleList) populateTable() {
 func (sl *ScheduleList) showError(err error) {
 	sl.table.ClearRows()
 	sl.table.SetHeaders("SCHEDULE ID", "WORKFLOW TYPE", "SPEC", "STATUS", "NEXT RUN")
-	sl.table.AddColoredRow(ui.ColorFailed(),
-		ui.IconFailed+" Error loading schedules",
+	sl.table.AddRowWithColor(theme.Error(),
+		theme.IconError+" Error loading schedules",
 		err.Error(),
 		"",
 		"",
@@ -285,66 +292,126 @@ func (sl *ScheduleList) getSelectedSchedule() *temporal.Schedule {
 	return nil
 }
 
-// Mutation methods
+// Mutation methods - implemented using jig components
 
 func (sl *ScheduleList) showPauseConfirm() {
-	s := sl.getSelectedSchedule()
-	if s == nil {
+	schedule := sl.getSelectedSchedule()
+	if schedule == nil {
 		return
 	}
 
-	if s.Paused {
-		sl.showUnpauseConfirm(s)
+	// If already paused, show unpause confirmation instead
+	if schedule.Paused {
+		sl.showUnpauseConfirm(schedule)
 		return
 	}
 
-	command := fmt.Sprintf(`temporal schedule toggle \
-  --schedule-id %s \
-  --namespace %s \
-  --pause \
-  --reason "Paused via TUI"`,
-		s.ID, sl.namespace)
-
-	modal := ui.NewConfirmModal(
-		"Pause Schedule",
-		fmt.Sprintf("Pause schedule %s?", s.ID),
-		command,
-	).SetOnConfirm(func() {
-		sl.executePauseSchedule(s.ID)
-	}).SetOnCancel(func() {
-		sl.closeModal("confirm-pause")
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Pause Schedule", theme.IconWarning),
+		Width:    60,
+		Height:   12,
+		Backdrop: true,
 	})
 
-	sl.app.UI().Pages().AddPage("confirm-pause", modal, true, true)
-	sl.app.UI().SetFocus(modal)
+	contentFlex := tview.NewFlex().SetDirection(tview.FlexRow)
+	contentFlex.SetBackgroundColor(theme.Bg())
+
+	infoText := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft)
+	infoText.SetBackgroundColor(theme.Bg())
+	infoText.SetText(fmt.Sprintf("[%s]Schedule:[-] [%s]%s[-]\n[%s]Workflow:[-] [%s]%s[-]",
+		theme.TagFgDim(), theme.TagFg(), schedule.ID,
+		theme.TagFgDim(), theme.TagFg(), schedule.WorkflowType))
+
+	form := components.NewForm()
+	form.AddTextField("reason", "Reason", "Paused via tempo")
+	form.SetOnSubmit(func(values map[string]any) {
+		reason := values["reason"].(string)
+		sl.closeModal("pause-confirm")
+		sl.executePauseSchedule(schedule.ID, reason)
+	})
+	form.SetOnCancel(func() {
+		sl.closeModal("pause-confirm")
+	})
+
+	contentFlex.AddItem(infoText, 3, 0, false)
+	contentFlex.AddItem(form, 0, 1, true)
+
+	modal.SetContent(contentFlex)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter", Description: "Pause"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		values := form.GetValues()
+		reason := values["reason"].(string)
+		sl.closeModal("pause-confirm")
+		sl.executePauseSchedule(schedule.ID, reason)
+	})
+	modal.SetOnCancel(func() {
+		sl.closeModal("pause-confirm")
+	})
+
+	sl.app.JigApp().Pages().AddPage("pause-confirm", modal, true, true)
+	sl.app.JigApp().SetFocus(form)
 }
 
 func (sl *ScheduleList) showUnpauseConfirm(s *temporal.Schedule) {
-	command := fmt.Sprintf(`temporal schedule toggle \
-  --schedule-id %s \
-  --namespace %s \
-  --unpause \
-  --reason "Unpaused via TUI"`,
-		s.ID, sl.namespace)
-
-	modal := ui.NewConfirmModal(
-		"Unpause Schedule",
-		fmt.Sprintf("Unpause schedule %s?", s.ID),
-		command,
-	).SetOnConfirm(func() {
-		sl.executeUnpauseSchedule(s.ID)
-	}).SetOnCancel(func() {
-		sl.closeModal("confirm-unpause")
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Unpause Schedule", theme.IconInfo),
+		Width:    60,
+		Height:   12,
+		Backdrop: true,
 	})
 
-	sl.app.UI().Pages().AddPage("confirm-unpause", modal, true, true)
-	sl.app.UI().SetFocus(modal)
+	contentFlex := tview.NewFlex().SetDirection(tview.FlexRow)
+	contentFlex.SetBackgroundColor(theme.Bg())
+
+	infoText := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft)
+	infoText.SetBackgroundColor(theme.Bg())
+	infoText.SetText(fmt.Sprintf("[%s]Schedule:[-] [%s]%s[-]\n[%s]Workflow:[-] [%s]%s[-]",
+		theme.TagFgDim(), theme.TagFg(), s.ID,
+		theme.TagFgDim(), theme.TagFg(), s.WorkflowType))
+
+	form := components.NewForm()
+	form.AddTextField("reason", "Reason", "Unpaused via tempo")
+	form.SetOnSubmit(func(values map[string]any) {
+		reason := values["reason"].(string)
+		sl.closeModal("unpause-confirm")
+		sl.executeUnpauseSchedule(s.ID, reason)
+	})
+	form.SetOnCancel(func() {
+		sl.closeModal("unpause-confirm")
+	})
+
+	contentFlex.AddItem(infoText, 3, 0, false)
+	contentFlex.AddItem(form, 0, 1, true)
+
+	modal.SetContent(contentFlex)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter", Description: "Unpause"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		values := form.GetValues()
+		reason := values["reason"].(string)
+		sl.closeModal("unpause-confirm")
+		sl.executeUnpauseSchedule(s.ID, reason)
+	})
+	modal.SetOnCancel(func() {
+		sl.closeModal("unpause-confirm")
+	})
+
+	sl.app.JigApp().Pages().AddPage("unpause-confirm", modal, true, true)
+	sl.app.JigApp().SetFocus(form)
 }
 
-func (sl *ScheduleList) executePauseSchedule(scheduleID string) {
+func (sl *ScheduleList) executePauseSchedule(scheduleID, reason string) {
 	provider := sl.app.Provider()
 	if provider == nil {
-		sl.closeModal("confirm-pause")
 		return
 	}
 
@@ -352,23 +419,21 @@ func (sl *ScheduleList) executePauseSchedule(scheduleID string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		err := provider.PauseSchedule(ctx, sl.namespace, scheduleID, "Paused via TUI")
+		err := provider.PauseSchedule(ctx, sl.namespace, scheduleID, reason)
 
-		sl.app.UI().QueueUpdateDraw(func() {
-			sl.closeModal("confirm-pause")
+		sl.app.JigApp().QueueUpdateDraw(func() {
 			if err != nil {
 				sl.showError(err)
-			} else {
-				sl.loadData()
+				return
 			}
+			sl.loadData() // Refresh to show updated status
 		})
 	}()
 }
 
-func (sl *ScheduleList) executeUnpauseSchedule(scheduleID string) {
+func (sl *ScheduleList) executeUnpauseSchedule(scheduleID, reason string) {
 	provider := sl.app.Provider()
 	if provider == nil {
-		sl.closeModal("confirm-unpause")
 		return
 	}
 
@@ -376,48 +441,67 @@ func (sl *ScheduleList) executeUnpauseSchedule(scheduleID string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		err := provider.UnpauseSchedule(ctx, sl.namespace, scheduleID, "Unpaused via TUI")
+		err := provider.UnpauseSchedule(ctx, sl.namespace, scheduleID, reason)
 
-		sl.app.UI().QueueUpdateDraw(func() {
-			sl.closeModal("confirm-unpause")
+		sl.app.JigApp().QueueUpdateDraw(func() {
 			if err != nil {
 				sl.showError(err)
-			} else {
-				sl.loadData()
+				return
 			}
+			sl.loadData() // Refresh to show updated status
 		})
 	}()
 }
 
 func (sl *ScheduleList) showTriggerConfirm() {
-	s := sl.getSelectedSchedule()
-	if s == nil {
+	schedule := sl.getSelectedSchedule()
+	if schedule == nil {
 		return
 	}
 
-	command := fmt.Sprintf(`temporal schedule trigger \
-  --schedule-id %s \
-  --namespace %s`,
-		s.ID, sl.namespace)
-
-	modal := ui.NewConfirmModal(
-		"Trigger Schedule",
-		fmt.Sprintf("Trigger schedule %s now?", s.ID),
-		command,
-	).SetOnConfirm(func() {
-		sl.executeTriggerSchedule(s.ID)
-	}).SetOnCancel(func() {
-		sl.closeModal("confirm-trigger")
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Trigger Schedule", theme.IconSignal),
+		Width:    60,
+		Height:   12,
+		Backdrop: true,
 	})
 
-	sl.app.UI().Pages().AddPage("confirm-trigger", modal, true, true)
-	sl.app.UI().SetFocus(modal)
+	contentFlex := tview.NewFlex().SetDirection(tview.FlexRow)
+	contentFlex.SetBackgroundColor(theme.Bg())
+
+	infoText := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft)
+	infoText.SetBackgroundColor(theme.Bg())
+	infoText.SetText(fmt.Sprintf(`[%s]Trigger schedule immediately?[-]
+
+[%s]Schedule:[-] [%s]%s[-]
+[%s]Workflow:[-] [%s]%s[-]`,
+		theme.TagAccent(),
+		theme.TagFgDim(), theme.TagFg(), schedule.ID,
+		theme.TagFgDim(), theme.TagFg(), schedule.WorkflowType))
+
+	contentFlex.AddItem(infoText, 0, 1, true)
+
+	modal.SetContent(contentFlex)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter", Description: "Trigger"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		sl.closeModal("trigger-confirm")
+		sl.executeTriggerSchedule(schedule.ID)
+	})
+	modal.SetOnCancel(func() {
+		sl.closeModal("trigger-confirm")
+	})
+
+	sl.app.JigApp().Pages().AddPage("trigger-confirm", modal, true, true)
 }
 
 func (sl *ScheduleList) executeTriggerSchedule(scheduleID string) {
 	provider := sl.app.Provider()
 	if provider == nil {
-		sl.closeModal("confirm-trigger")
 		return
 	}
 
@@ -427,47 +511,87 @@ func (sl *ScheduleList) executeTriggerSchedule(scheduleID string) {
 
 		err := provider.TriggerSchedule(ctx, sl.namespace, scheduleID)
 
-		sl.app.UI().QueueUpdateDraw(func() {
-			sl.closeModal("confirm-trigger")
+		sl.app.JigApp().QueueUpdateDraw(func() {
 			if err != nil {
 				sl.showError(err)
-			} else {
-				sl.loadData()
+				return
 			}
+			sl.loadData() // Refresh to show updated status
 		})
 	}()
 }
 
 func (sl *ScheduleList) showDeleteConfirm() {
-	s := sl.getSelectedSchedule()
-	if s == nil {
+	schedule := sl.getSelectedSchedule()
+	if schedule == nil {
 		return
 	}
 
-	command := fmt.Sprintf(`temporal schedule delete \
-  --schedule-id %s \
-  --namespace %s`,
-		s.ID, sl.namespace)
-
-	modal := ui.NewConfirmModal(
-		"Delete Schedule",
-		fmt.Sprintf("Delete schedule %s?", s.ID),
-		command,
-	).SetWarning("This will permanently delete the schedule. This cannot be undone.").
-		SetOnConfirm(func() {
-			sl.executeDeleteSchedule(s.ID)
-		}).SetOnCancel(func() {
-		sl.closeModal("confirm-delete-schedule")
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Delete Schedule", theme.IconError),
+		Width:    65,
+		Height:   14,
+		Backdrop: true,
 	})
 
-	sl.app.UI().Pages().AddPage("confirm-delete-schedule", modal, true, true)
-	sl.app.UI().SetFocus(modal)
+	contentFlex := tview.NewFlex().SetDirection(tview.FlexRow)
+	contentFlex.SetBackgroundColor(theme.Bg())
+
+	warningText := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft)
+	warningText.SetBackgroundColor(theme.Bg())
+	warningText.SetText(fmt.Sprintf(`[%s]Warning: This will permanently delete the schedule.
+This action cannot be undone.[-]
+
+[%s]Schedule:[-] [%s]%s[-]
+[%s]Workflow:[-] [%s]%s[-]`,
+		theme.TagError(),
+		theme.TagFgDim(), theme.TagFg(), schedule.ID,
+		theme.TagFgDim(), theme.TagFg(), schedule.WorkflowType))
+
+	form := components.NewForm()
+	form.AddTextField("confirm", "Type schedule ID to confirm", "")
+	form.SetOnSubmit(func(values map[string]any) {
+		confirm := values["confirm"].(string)
+		if confirm != schedule.ID {
+			return // Must match schedule ID
+		}
+		sl.closeModal("delete-confirm")
+		sl.executeDeleteSchedule(schedule.ID)
+	})
+	form.SetOnCancel(func() {
+		sl.closeModal("delete-confirm")
+	})
+
+	contentFlex.AddItem(warningText, 6, 0, false)
+	contentFlex.AddItem(form, 0, 1, true)
+
+	modal.SetContent(contentFlex)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Enter", Description: "Delete"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		values := form.GetValues()
+		confirm := values["confirm"].(string)
+		if confirm != schedule.ID {
+			return
+		}
+		sl.closeModal("delete-confirm")
+		sl.executeDeleteSchedule(schedule.ID)
+	})
+	modal.SetOnCancel(func() {
+		sl.closeModal("delete-confirm")
+	})
+
+	sl.app.JigApp().Pages().AddPage("delete-confirm", modal, true, true)
+	sl.app.JigApp().SetFocus(form)
 }
 
 func (sl *ScheduleList) executeDeleteSchedule(scheduleID string) {
 	provider := sl.app.Provider()
 	if provider == nil {
-		sl.closeModal("confirm-delete-schedule")
 		return
 	}
 
@@ -477,21 +601,20 @@ func (sl *ScheduleList) executeDeleteSchedule(scheduleID string) {
 
 		err := provider.DeleteSchedule(ctx, sl.namespace, scheduleID)
 
-		sl.app.UI().QueueUpdateDraw(func() {
-			sl.closeModal("confirm-delete-schedule")
+		sl.app.JigApp().QueueUpdateDraw(func() {
 			if err != nil {
 				sl.showError(err)
-			} else {
-				sl.loadData()
+				return
 			}
+			sl.loadData() // Refresh to remove deleted schedule
 		})
 	}()
 }
 
 func (sl *ScheduleList) closeModal(name string) {
-	sl.app.UI().Pages().RemovePage(name)
-	if current := sl.app.UI().Pages().Current(); current != nil {
-		sl.app.UI().SetFocus(current)
+	sl.app.JigApp().Pages().RemovePage(name)
+	if current := sl.app.JigApp().Pages().Current(); current != nil {
+		sl.app.JigApp().SetFocus(current)
 	}
 }
 
@@ -528,18 +651,11 @@ func (sl *ScheduleList) Start() {
 // Stop is called when the view is deactivated.
 func (sl *ScheduleList) Stop() {
 	sl.table.SetInputCapture(nil)
-	if sl.unsubscribeTheme != nil {
-		sl.unsubscribeTheme()
-	}
-	// Clean up component theme listeners to prevent memory leaks and visual glitches
-	sl.table.Destroy()
-	sl.leftPanel.Destroy()
-	sl.rightPanel.Destroy()
 }
 
 // Hints returns keybinding hints for this view.
-func (sl *ScheduleList) Hints() []ui.KeyHint {
-	hints := []ui.KeyHint{
+func (sl *ScheduleList) Hints() []KeyHint {
+	hints := []KeyHint{
 		{Key: "r", Description: "Refresh"},
 		{Key: "j/k", Description: "Navigate"},
 		{Key: "p", Description: "Preview"},
@@ -559,9 +675,9 @@ func (sl *ScheduleList) Focus(delegate func(p tview.Primitive)) {
 
 // Draw applies theme colors dynamically and draws the view.
 func (sl *ScheduleList) Draw(screen tcell.Screen) {
-	bg := ui.ColorBg()
+	bg := theme.Bg()
 	sl.SetBackgroundColor(bg)
 	sl.preview.SetBackgroundColor(bg)
-	sl.preview.SetTextColor(ui.ColorFg())
+	sl.preview.SetTextColor(theme.Fg())
 	sl.Flex.Draw(screen)
 }

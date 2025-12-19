@@ -1,9 +1,10 @@
-package ui
+package view
 
 import (
 	"fmt"
 
-	"github.com/atterpac/loom/internal/temporal"
+	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/tempo/internal/temporal"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -72,9 +73,9 @@ func (etv *EventTreeView) Destroy() {}
 
 // Draw applies theme colors dynamically before drawing.
 func (etv *EventTreeView) Draw(screen tcell.Screen) {
-	etv.SetBackgroundColor(ColorBg())
-	etv.SetGraphicsColor(ColorFgDim())
-	etv.root.SetColor(ColorAccent())
+	etv.SetBackgroundColor(theme.Bg())
+	etv.SetGraphicsColor(theme.FgDim())
+	etv.root.SetColor(theme.Accent())
 	etv.refreshColors()
 	etv.TreeView.Draw(screen)
 }
@@ -148,46 +149,29 @@ func (etv *EventTreeView) formatNodeText(node *temporal.EventTreeNode) string {
 func (etv *EventTreeView) statusIcon(status string) string {
 	switch status {
 	case "Running":
-		return IconRunning
+		return theme.IconRunning
 	case "Completed":
-		return IconCompleted
+		return theme.IconCompleted
 	case "Failed":
-		return IconFailed
+		return theme.IconFailed
 	case "Canceled":
-		return IconCanceled
+		return theme.IconCanceled
 	case "Terminated":
-		return IconTerminated
+		return theme.IconTerminated
 	case "TimedOut":
-		return IconTimedOut
+		return theme.IconTimedOut
 	case "Fired":
-		return IconCompleted
+		return theme.IconCompleted
 	case "Scheduled", "Initiated", "Pending":
-		return IconPending
+		return theme.IconPending
 	default:
-		return IconEvent
+		return theme.IconEvent
 	}
 }
 
 // statusColor returns the color for a node status.
 func (etv *EventTreeView) statusColor(status string) tcell.Color {
-	switch status {
-	case "Running":
-		return ColorRunning()
-	case "Completed", "Fired":
-		return ColorCompleted()
-	case "Failed":
-		return ColorFailed()
-	case "Canceled":
-		return ColorCanceled()
-	case "Terminated":
-		return ColorTerminated()
-	case "TimedOut":
-		return ColorTimedOut()
-	case "Scheduled", "Initiated", "Pending":
-		return ColorFgDim()
-	default:
-		return ColorFg()
-	}
+	return theme.StatusColor(status)
 }
 
 // refreshColors updates all node colors after theme change.

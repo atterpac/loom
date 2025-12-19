@@ -8,10 +8,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/atterpac/loom/internal/config"
-	"github.com/atterpac/loom/internal/temporal"
-	"github.com/atterpac/loom/internal/ui"
-	"github.com/atterpac/loom/internal/view"
+	"github.com/atterpac/jig/theme"
+	"github.com/atterpac/jig/theme/themes"
+	"github.com/atterpac/jig/util"
+	"github.com/atterpac/tempo/internal/config"
+	"github.com/atterpac/tempo/internal/temporal"
+	"github.com/atterpac/tempo/internal/view"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -26,7 +28,7 @@ var (
 	tlsCA         = flag.String("tls-ca", "", "Path to CA certificate (overrides profile)")
 	tlsServerName = flag.String("tls-server-name", "", "Server name for TLS verification (overrides profile)")
 	tlsSkipVerify = flag.Bool("tls-skip-verify", false, "Skip TLS verification (insecure)")
-	themeName     = flag.String("theme", "", "Theme name (overrides config file)")
+	themeNameFlag = flag.String("theme", "", "Theme name (overrides config file)")
 	devMode       = flag.Bool("dev", false, "Development mode: test splash screen with theme cycling")
 )
 
@@ -47,19 +49,21 @@ func main() {
 	}
 
 	// Determine theme: CLI flag overrides config file
-	theme := cfg.Theme
-	if *themeName != "" {
-		theme = *themeName
+	themeName := cfg.Theme
+	if *themeNameFlag != "" {
+		themeName = *themeNameFlag
 	}
 
-	// Initialize theme system before any UI
-	if err := ui.InitTheme(theme); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to load theme %q: %v, using tokyonight-night\n", theme, err)
-		if err := ui.InitTheme("tokyonight-night"); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: failed to initialize theme: %v\n", err)
-			os.Exit(1)
-		}
+	// Initialize theme system before any UI using jig's built-in themes
+	selectedTheme := themes.Get(themeName)
+	if selectedTheme == nil {
+		fmt.Fprintf(os.Stderr, "Warning: theme %q not found, using tokyonight-night\n", themeName)
+		selectedTheme = themes.Default()
 	}
+	theme.SetProvider(selectedTheme)
+
+	// Register Temporal-specific statuses with jig's theme system
+	temporal.RegisterTemporalStatuses()
 
 	// Determine which profile to use
 	activeProfileName := cfg.ActiveProfile
@@ -129,16 +133,26 @@ func main() {
 }
 
 const splashLogo = `
-__/\\\___________________/\\\\\____________/\\\\\_______/\\\\____________/\\\\_        
- _\/\\\_________________/\\\///\\\________/\\\///\\\____\/\\\\\\________/\\\\\\_       
-  _\/\\\_______________/\\\/__\///\\\____/\\\/__\///\\\__\/\\\//\\\____/\\\//\\\_      
-   _\/\\\______________/\\\______\//\\\__/\\\______\//\\\_\/\\\\///\\\/\\\/_\/\\\_     
-    _\/\\\_____________\/\\\_______\/\\\_\/\\\_______\/\\\_\/\\\__\///\\\/___\/\\\_    
-     _\/\\\_____________\//\\\______/\\\__\//\\\______/\\\__\/\\\____\///_____\/\\\_   
-      _\/\\\______________\///\\\__/\\\_____\///\\\__/\\\____\/\\\_____________\/\\\_  
-       _\/\\\\\\\\\\\\\\\____\///\\\\\/________\///\\\\\/_____\/\\\_____________\/\\\_ 
-        _\///////////////_______\/////____________\/////_______\///______________\///__
+░▒▓████████▓▒░▒▓████████▓▒░▒▓██████████████▓▒░░▒▓███████▓▒░ ░▒▓██████▓▒░  
+   ░▒▓█▓▒░   ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+   ░▒▓█▓▒░   ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░ 
+   ░▒▓█▓▒░   ░▒▓██████▓▒░ ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓███████▓▒░░▒▓█▓▒░░▒▓█▓▒░ 
+   ░▒▓█▓▒░   ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░ 
+   ░▒▓█▓▒░   ░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░ 
+   ░▒▓█▓▒░   ░▒▓████████▓▒░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░       ░▒▓██████▓▒░  
 `
+
+// const splashLogo = `
+// __/\\\___________________/\\\\\____________/\\\\\_______/\\\\____________/\\\\_        
+//  _\/\\\_________________/\\\///\\\________/\\\///\\\____\/\\\\\\________/\\\\\\_       
+//   _\/\\\_______________/\\\/__\///\\\____/\\\/__\///\\\__\/\\\//\\\____/\\\//\\\_      
+//    _\/\\\______________/\\\______\//\\\__/\\\______\//\\\_\/\\\\///\\\/\\\/_\/\\\_     
+//     _\/\\\_____________\/\\\_______\/\\\_\/\\\_______\/\\\_\/\\\__\///\\\/___\/\\\_    
+//      _\/\\\_____________\//\\\______/\\\__\//\\\______/\\\__\/\\\____\///_____\/\\\_   
+//       _\/\\\______________\///\\\__/\\\_____\///\\\__/\\\____\/\\\_____________\/\\\_  
+//        _\/\\\\\\\\\\\\\\\____\///\\\\\/________\///\\\\\/_____\/\\\_____________\/\\\_ 
+//         _\///////////////_______\/////____________\/////_______\///______________\///__
+// `
 
 // ASCII art logo for the splash screen
 // const splashLogo = `
@@ -182,58 +196,58 @@ __/\\\___________________/\\\\\____________/\\\\\_______/\\\\____________/\\\\_
 func connectWithUI(config temporal.ConnectionConfig) (temporal.Provider, error) {
 	app := tview.NewApplication()
 
-	// Note: Global tview.Styles are already set by ui.InitTheme() in main()
+	// Note: Global tview.Styles are already set by theme.SetProvider() in main()
 
 	// Logo display - use left alignment to preserve internal spacing
 	logoText := tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignLeft)
-	logoText.SetBackgroundColor(ui.ColorBg())
+	logoText.SetBackgroundColor(theme.Bg())
 
 	// Apply gradient effect to logo using theme colors
-	gradientColors := ui.DefaultGradientTags()
-	gradientLogo := ui.ApplyDiagonalGradient(splashLogo, gradientColors)
+	gradientColors := util.DefaultGradientColors()
+	gradientLogo := util.ApplyDiagonalGradient(splashLogo, gradientColors)
 	logoText.SetText(gradientLogo)
 
 	// Create spacer boxes with background color
-	leftSpacer := tview.NewBox().SetBackgroundColor(ui.ColorBg())
-	rightSpacer := tview.NewBox().SetBackgroundColor(ui.ColorBg())
-	topSpacer := tview.NewBox().SetBackgroundColor(ui.ColorBg())
-	midSpacer := tview.NewBox().SetBackgroundColor(ui.ColorBg())
-	bottomSpacer := tview.NewBox().SetBackgroundColor(ui.ColorBg())
+	leftSpacer := tview.NewBox().SetBackgroundColor(theme.Bg())
+	rightSpacer := tview.NewBox().SetBackgroundColor(theme.Bg())
+	topSpacer := tview.NewBox().SetBackgroundColor(theme.Bg())
+	midSpacer := tview.NewBox().SetBackgroundColor(theme.Bg())
+	bottomSpacer := tview.NewBox().SetBackgroundColor(theme.Bg())
 
 	// Wrap logo in horizontal flex to center it as a block
 	logoContainer := tview.NewFlex().SetDirection(tview.FlexColumn).
 		AddItem(leftSpacer, 0, 1, false).
-		AddItem(logoText, 90, 0, false).
+		AddItem(logoText, 78, 0, false).
 		AddItem(rightSpacer, 0, 1, false)
-	logoContainer.SetBackgroundColor(ui.ColorBg())
+	logoContainer.SetBackgroundColor(theme.Bg())
 
 	// Status display
 	statusText := tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignCenter)
-	statusText.SetBackgroundColor(ui.ColorBg())
+	statusText.SetBackgroundColor(theme.Bg())
 
 	// Sponsor display (centered, subtle)
 	sponsorText := tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignCenter)
-	sponsorText.SetBackgroundColor(ui.ColorBg())
+	sponsorText.SetBackgroundColor(theme.Bg())
 	sponsorText.SetText(fmt.Sprintf(
-		"[%s]%s Sponsor this project: github.com/sponsors/atterpac[-]",
-		ui.TagFgDim(), ui.IconHeart,
+		"[%s]Made with %s  by getgalaxy.io[-]",
+		theme.TagFgDim(), theme.IconHeart,
 	))
 
 	// Build layout
 	flex := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(topSpacer, 0, 1, false).
-		AddItem(logoContainer, 17, 0, false).
+		AddItem(logoContainer, 9, 0, false).
 		AddItem(statusText, 3, 0, false).
 		AddItem(midSpacer, 1, 0, false).
 		AddItem(sponsorText, 1, 0, false).
 		AddItem(bottomSpacer, 0, 1, false)
-	flex.SetBackgroundColor(ui.ColorBg())
+	flex.SetBackgroundColor(theme.Bg())
 
 	// Result channels and sync
 	var provider temporal.Provider
@@ -245,14 +259,14 @@ func connectWithUI(config temporal.ConnectionConfig) (temporal.Provider, error) 
 
 	// setStatusText sets the status text content
 	setStatusText := func(msg string, isError bool) {
-		color := ui.TagAccent()
+		color := theme.TagAccent()
 		if isError {
-			color = ui.TagFailed()
+			color = theme.TagError()
 		}
 		statusText.SetText(fmt.Sprintf(
 			"[%s]%s[-]\n[%s]Press 'q' to quit[-]",
 			color, msg,
-			ui.TagFgDim(),
+			theme.TagFgDim(),
 		))
 	}
 

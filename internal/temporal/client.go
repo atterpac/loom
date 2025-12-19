@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/atterpac/loom/internal/config"
+	"github.com/atterpac/tempo/internal/config"
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
@@ -57,7 +57,7 @@ func initLogFile() {
 		return
 	}
 
-	logPath := filepath.Join(config.ConfigDir(), "loom.log")
+	logPath := filepath.Join(config.ConfigDir(), "tempo.log")
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		// Fall back to discarding logs if we can't open the file
@@ -550,7 +550,69 @@ func (c *Client) GetWorkflow(ctx context.Context, namespace, workflowID, runID s
 		wf.ParentID = &parentID
 	}
 
+	// Fetch input/output from workflow history
+	wf.Input, wf.Output = c.getWorkflowInputOutput(ctx, namespace, workflowID, runID)
+
 	return wf, nil
+}
+
+// getWorkflowInputOutput extracts input and output from workflow history events.
+func (c *Client) getWorkflowInputOutput(ctx context.Context, namespace, workflowID, runID string) (input, output string) {
+	// Get workflow history to extract input/output
+	histResp, err := c.client.WorkflowService().GetWorkflowExecutionHistory(ctx, &workflowservice.GetWorkflowExecutionHistoryRequest{
+		Namespace: namespace,
+		Execution: &commonpb.WorkflowExecution{
+			WorkflowId: workflowID,
+			RunId:      runID,
+		},
+		MaximumPageSize: 100, // Usually enough to get start and end events
+	})
+	if err != nil {
+		return "", ""
+	}
+
+	events := histResp.GetHistory().GetEvents()
+	for _, event := range events {
+		switch event.GetEventType() {
+		case enums.EVENT_TYPE_WORKFLOW_EXECUTION_STARTED:
+			attrs := event.GetWorkflowExecutionStartedEventAttributes()
+			if attrs != nil && attrs.GetInput() != nil {
+				input = formatPayloads(attrs.GetInput())
+			}
+
+		case enums.EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED:
+			attrs := event.GetWorkflowExecutionCompletedEventAttributes()
+			if attrs != nil && attrs.GetResult() != nil {
+				output = formatPayloads(attrs.GetResult())
+			}
+
+		case enums.EVENT_TYPE_WORKFLOW_EXECUTION_FAILED:
+			attrs := event.GetWorkflowExecutionFailedEventAttributes()
+			if attrs != nil && attrs.GetFailure() != nil {
+				output = attrs.GetFailure().GetMessage()
+				if attrs.GetFailure().GetStackTrace() != "" {
+					output += "\n\nStack Trace:\n" + attrs.GetFailure().GetStackTrace()
+				}
+			}
+
+		case enums.EVENT_TYPE_WORKFLOW_EXECUTION_CANCELED:
+			attrs := event.GetWorkflowExecutionCanceledEventAttributes()
+			if attrs != nil && attrs.GetDetails() != nil {
+				output = formatPayloads(attrs.GetDetails())
+			}
+
+		case enums.EVENT_TYPE_WORKFLOW_EXECUTION_TERMINATED:
+			attrs := event.GetWorkflowExecutionTerminatedEventAttributes()
+			if attrs != nil {
+				output = attrs.GetReason()
+			}
+
+		case enums.EVENT_TYPE_WORKFLOW_EXECUTION_TIMED_OUT:
+			output = "Workflow timed out"
+		}
+	}
+
+	return input, output
 }
 
 // GetWorkflowHistory returns the event history for a workflow execution.
