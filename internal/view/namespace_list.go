@@ -325,6 +325,12 @@ func (nl *NamespaceList) Start() {
 		case 'X':
 			// TODO: Delete confirm
 			return nil
+		case 'S':
+			ns := nl.getSelectedNamespace()
+			if ns != nil {
+				nl.showSignalWithStart(ns.Name)
+			}
+			return nil
 		}
 		return event
 	})
@@ -354,6 +360,7 @@ func (nl *NamespaceList) Hints() []KeyHint {
 	}
 
 	hints = append(hints,
+		KeyHint{Key: "S", Description: "Signal+Start"},
 		KeyHint{Key: "p", Description: "Preview"},
 		KeyHint{Key: "r", Description: "Refresh"},
 		KeyHint{Key: "a", Description: "Auto-refresh"},
@@ -389,4 +396,117 @@ func (nl *NamespaceList) getSelectedNamespace() *temporal.Namespace {
 		return &nl.namespaces[row]
 	}
 	return nil
+}
+
+// showSignalWithStart displays a modal for SignalWithStart operation.
+func (nl *NamespaceList) showSignalWithStart(namespace string) {
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Signal With Start (%s)", theme.IconInfo, namespace),
+		Width:    70,
+		Height:   20,
+		Backdrop: true,
+	})
+
+	form := components.NewForm()
+	form.AddTextField("workflowId", "Workflow ID", "")
+	form.AddTextField("workflowType", "Workflow Type", "")
+	form.AddTextField("taskQueue", "Task Queue", "")
+	form.AddTextField("signalName", "Signal Name", "")
+	form.AddTextField("signalInput", "Signal Input (JSON, optional)", "")
+	form.AddTextField("workflowInput", "Workflow Input (JSON, optional)", "")
+	form.SetOnSubmit(func(values map[string]any) {
+		workflowID := values["workflowId"].(string)
+		workflowType := values["workflowType"].(string)
+		taskQueue := values["taskQueue"].(string)
+		signalName := values["signalName"].(string)
+		signalInput := values["signalInput"].(string)
+		workflowInput := values["workflowInput"].(string)
+
+		// Validate required fields
+		if workflowID == "" || workflowType == "" || taskQueue == "" || signalName == "" {
+			return
+		}
+
+		nl.closeModal("signal-with-start")
+		nl.executeSignalWithStart(namespace, workflowID, workflowType, taskQueue, signalName, signalInput, workflowInput)
+	})
+	form.SetOnCancel(func() {
+		nl.closeModal("signal-with-start")
+	})
+
+	modal.SetContent(form)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Tab", Description: "Next field"},
+		{Key: "Enter", Description: "Execute"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		values := form.GetValues()
+		workflowID := values["workflowId"].(string)
+		workflowType := values["workflowType"].(string)
+		taskQueue := values["taskQueue"].(string)
+		signalName := values["signalName"].(string)
+		signalInput := values["signalInput"].(string)
+		workflowInput := values["workflowInput"].(string)
+
+		if workflowID == "" || workflowType == "" || taskQueue == "" || signalName == "" {
+			return
+		}
+
+		nl.closeModal("signal-with-start")
+		nl.executeSignalWithStart(namespace, workflowID, workflowType, taskQueue, signalName, signalInput, workflowInput)
+	})
+	modal.SetOnCancel(func() {
+		nl.closeModal("signal-with-start")
+	})
+
+	nl.app.JigApp().Pages().AddPage("signal-with-start", modal, true, true)
+	nl.app.JigApp().SetFocus(form)
+}
+
+// executeSignalWithStart performs the SignalWithStart operation asynchronously.
+func (nl *NamespaceList) executeSignalWithStart(namespace, workflowID, workflowType, taskQueue, signalName, signalInput, workflowInput string) {
+	provider := nl.app.Provider()
+	if provider == nil {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		req := temporal.SignalWithStartRequest{
+			WorkflowID:   workflowID,
+			WorkflowType: workflowType,
+			TaskQueue:    taskQueue,
+			SignalName:   signalName,
+		}
+
+		if signalInput != "" {
+			req.SignalInput = []byte(signalInput)
+		}
+		if workflowInput != "" {
+			req.WorkflowInput = []byte(workflowInput)
+		}
+
+		runID, err := provider.SignalWithStartWorkflow(ctx, namespace, req)
+
+		nl.app.JigApp().QueueUpdateDraw(func() {
+			if err != nil {
+				ShowErrorModal(nl.app.JigApp(), "SignalWithStart Failed", err.Error())
+				return
+			}
+
+			ShowInfoModal(nl.app.JigApp(), "SignalWithStart Successful",
+				fmt.Sprintf("Workflow: %s\nRun ID: %s", workflowID, runID))
+		})
+	}()
+}
+
+// closeModal removes a modal page and restores focus to the current view.
+func (nl *NamespaceList) closeModal(name string) {
+	nl.app.JigApp().Pages().RemovePage(name)
+	if current := nl.app.JigApp().Pages().Current(); current != nil {
+		nl.app.JigApp().SetFocus(current)
+	}
 }

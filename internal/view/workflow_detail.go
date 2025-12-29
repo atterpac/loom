@@ -21,7 +21,7 @@ type WorkflowDetail struct {
 	workflowID       string
 	runID            string
 	workflow         *temporal.Workflow
-	events           []temporal.HistoryEvent
+	events           []temporal.EnhancedHistoryEvent
 	leftFlex         *tview.Flex
 	workflowPanel    *components.Panel
 	eventDetailPanel *components.Panel
@@ -61,7 +61,7 @@ func (wd *WorkflowDetail) setup() {
 	wd.eventDetailView.SetBackgroundColor(theme.Bg())
 
 	// Event table
-	wd.eventTable.SetHeaders("ID", "TIME", "TYPE")
+	wd.eventTable.SetHeaders("ID", "TIME", "TYPE", "NAME")
 	wd.eventTable.SetBorder(false)
 	wd.eventTable.SetBackgroundColor(theme.Bg())
 
@@ -157,7 +157,7 @@ func (wd *WorkflowDetail) loadData() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		events, err := provider.GetWorkflowHistory(ctx, wd.app.CurrentNamespace(), wd.workflowID, wd.runID)
+		events, err := provider.GetEnhancedWorkflowHistory(ctx, wd.app.CurrentNamespace(), wd.workflowID, wd.runID)
 
 		wd.app.JigApp().QueueUpdateDraw(func() {
 			if err != nil {
@@ -180,14 +180,14 @@ func (wd *WorkflowDetail) loadMockData() {
 		TaskQueue: "mock-tasks",
 		StartTime: now.Add(-5 * time.Minute),
 	}
-	wd.events = []temporal.HistoryEvent{
+	wd.events = []temporal.EnhancedHistoryEvent{
 		{ID: 1, Type: "WorkflowExecutionStarted", Time: now.Add(-5 * time.Minute), Details: "WorkflowType: MockWorkflow, TaskQueue: mock-tasks"},
 		{ID: 2, Type: "WorkflowTaskScheduled", Time: now.Add(-5 * time.Minute), Details: "TaskQueue: mock-tasks"},
 		{ID: 3, Type: "WorkflowTaskStarted", Time: now.Add(-5 * time.Minute), Details: "Identity: worker-1@host"},
 		{ID: 4, Type: "WorkflowTaskCompleted", Time: now.Add(-5 * time.Minute), Details: "ScheduledEventId: 2"},
-		{ID: 5, Type: "ActivityTaskScheduled", Time: now.Add(-4 * time.Minute), Details: "ActivityType: MockActivity, TaskQueue: mock-tasks"},
-		{ID: 6, Type: "ActivityTaskStarted", Time: now.Add(-4 * time.Minute), Details: "Identity: worker-1@host, Attempt: 1"},
-		{ID: 7, Type: "ActivityTaskCompleted", Time: now.Add(-3 * time.Minute), Details: "ScheduledEventId: 5, Result: {success: true}"},
+		{ID: 5, Type: "ActivityTaskScheduled", Time: now.Add(-4 * time.Minute), Details: "ActivityType: MockActivity, TaskQueue: mock-tasks", ActivityType: "MockActivity"},
+		{ID: 6, Type: "ActivityTaskStarted", Time: now.Add(-4 * time.Minute), Details: "Identity: worker-1@host, Attempt: 1", ActivityType: "MockActivity", ScheduledEventID: 5},
+		{ID: 7, Type: "ActivityTaskCompleted", Time: now.Add(-3 * time.Minute), Details: "ScheduledEventId: 5, Result: {success: true}", ActivityType: "MockActivity", ScheduledEventID: 5},
 	}
 	wd.render()
 	wd.populateEventTable()
@@ -236,21 +236,28 @@ func (wd *WorkflowDetail) render() {
 	wd.workflowView.SetText(workflowText)
 }
 
-func (wd *WorkflowDetail) updateEventDetail(ev temporal.HistoryEvent) {
+func (wd *WorkflowDetail) updateEventDetail(ev temporal.EnhancedHistoryEvent) {
 	icon := eventIcon(ev.Type)
 	colorTag := eventColorTag(ev.Type)
 
 	// Parse and format the details string
 	formattedDetails := formatEventDetails(ev.Details)
 
+	// Build name line if applicable
+	var nameLine string
+	name := getEventNameDetail(&ev)
+	if name != "" {
+		nameLine = fmt.Sprintf("\n[%s::b]Name[-:-:-]         [%s]%s[-]", theme.TagFgDim(), theme.TagFg(), name)
+	}
+
 	detailText := fmt.Sprintf(`
 [%s::b]Event ID[-:-:-]     [%s]%d[-]
-[%s::b]Type[-:-:-]         [%s]%s %s[-]
+[%s::b]Type[-:-:-]         [%s]%s %s[-]%s
 [%s::b]Time[-:-:-]         [%s]%s[-]
 
 %s`,
 		theme.TagFgDim(), theme.TagFg(), ev.ID,
-		theme.TagFgDim(), colorTag, icon, ev.Type,
+		theme.TagFgDim(), colorTag, icon, ev.Type, nameLine,
 		theme.TagFgDim(), theme.TagFg(), ev.Time.Format("2006-01-02 15:04:05.000"),
 		formattedDetails,
 	)
@@ -463,15 +470,17 @@ func (wd *WorkflowDetail) populateEventTable() {
 	currentRow := wd.eventTable.SelectedRow()
 
 	wd.eventTable.ClearRows()
-	wd.eventTable.SetHeaders("ID", "TIME", "TYPE")
+	wd.eventTable.SetHeaders("ID", "TIME", "TYPE", "NAME")
 
 	for _, ev := range wd.events {
 		icon := eventIcon(ev.Type)
 		color := eventColor(ev.Type)
+		name := getEventNameDetail(&ev)
 		wd.eventTable.AddRowWithColor(color,
 			fmt.Sprintf("%d", ev.ID),
 			ev.Time.Format("15:04:05"),
 			icon+" "+truncateStr(ev.Type, 30),
+			name,
 		)
 	}
 
@@ -487,6 +496,20 @@ func (wd *WorkflowDetail) populateEventTable() {
 			}
 		}
 	}
+}
+
+// getEventNameDetail returns the activity type, timer ID, or child workflow type for an event.
+func getEventNameDetail(ev *temporal.EnhancedHistoryEvent) string {
+	if ev.ActivityType != "" {
+		return ev.ActivityType
+	}
+	if ev.TimerID != "" {
+		return "Timer: " + ev.TimerID
+	}
+	if ev.ChildWorkflowType != "" {
+		return ev.ChildWorkflowType
+	}
+	return ""
 }
 
 // Name returns the view name.

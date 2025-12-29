@@ -76,15 +76,42 @@ func (wl *WorkflowList) setup() {
 	wl.preview.SetTextColor(theme.Fg())
 	wl.preview.SetWordWrap(true)
 
-	// Create empty states
+	// Create empty states with input capture for keybindings
+	emptyInputCapture := func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Rune() {
+		case 'W':
+			wl.showSignalWithStart()
+			return nil
+		case 'r':
+			wl.loadData()
+			return nil
+		case 't':
+			wl.app.NavigateToTaskQueues()
+			return nil
+		case 's':
+			wl.app.NavigateToSchedules()
+			return nil
+		case 'a':
+			wl.toggleAutoRefresh()
+			return nil
+		case 'p':
+			wl.togglePreview()
+			return nil
+		}
+		return event
+	}
+
 	wl.emptyState = components.NewEmptyState().
 		SetIcon(theme.IconInfo).
 		SetTitle("No Workflows").
 		SetMessage("No workflows found in this namespace")
+	wl.emptyState.SetInputCapture(emptyInputCapture)
+
 	wl.noResultsState = components.NewEmptyState().
 		SetIcon(theme.IconSearch).
 		SetTitle("No Results").
 		SetMessage("No workflows match the current filter")
+	wl.noResultsState.SetInputCapture(emptyInputCapture)
 
 	// Create panels with icons (blubber pattern)
 	wl.leftPanel = components.NewPanel().SetTitle(fmt.Sprintf("%s Workflows", theme.IconWorkflow))
@@ -233,6 +260,10 @@ func (wl *WorkflowList) loadData() {
 			}
 			wl.allWorkflows = workflows
 			wl.applyFilter()
+			// Set focus to table after data loads
+			if len(wl.workflows) > 0 {
+				wl.app.JigApp().SetFocus(wl.table)
+			}
 		})
 	}()
 }
@@ -495,6 +526,9 @@ func (wl *WorkflowList) Start() {
 				wl.showSaveFilter()
 				return nil
 			}
+		case 'W':
+			wl.showSignalWithStart()
+			return nil
 		case 'd':
 			wl.startDiff()
 			return nil
@@ -508,13 +542,13 @@ func (wl *WorkflowList) Start() {
 
 		return event
 	})
+
 	wl.loadData()
 }
 
 // Stop is called when the view is deactivated.
 func (wl *WorkflowList) Stop() {
 	wl.table.SetInputCapture(nil)
-	wl.Flex.SetInputCapture(nil)
 	wl.stopAutoRefresh()
 	wl.app.ClearWorkflowStats()
 }
@@ -554,6 +588,7 @@ func (wl *WorkflowList) Hints() []KeyHint {
 		KeyHint{Key: "L", Description: "Load Filter"},
 		KeyHint{Key: "d", Description: "Diff"},
 		KeyHint{Key: "v", Description: "Select Mode"},
+		KeyHint{Key: "W", Description: "Signal+Start"},
 		KeyHint{Key: "y", Description: "Copy ID"},
 		KeyHint{Key: "r", Description: "Refresh"},
 		KeyHint{Key: "p", Description: "Preview"},
@@ -715,6 +750,7 @@ func (wl *WorkflowList) searchServer(searchTerm string) {
 func (wl *WorkflowList) updateFilterTitle(filter, hint string) {
 	if filter == "" {
 		wl.leftPanel.SetTitle(fmt.Sprintf("%s Workflows", theme.IconWorkflow))
+		wl.app.SetFilterSuggestion("")
 		return
 	}
 
@@ -725,6 +761,10 @@ func (wl *WorkflowList) updateFilterTitle(filter, hint string) {
 		if suffix != "" {
 			title += fmt.Sprintf("[%s]%s[-]", theme.TagFgMuted(), suffix)
 		}
+		// Set inline ghost text suggestion in command bar
+		wl.app.SetFilterSuggestion(hint)
+	} else {
+		wl.app.SetFilterSuggestion("")
 	}
 	title += ")[-]"
 	wl.leftPanel.SetTitle(title)
@@ -1498,4 +1538,110 @@ func copyToClipboard(text string) error {
 	}
 
 	return cmd.Wait()
+}
+
+// showSignalWithStart displays a modal for SignalWithStart operation.
+func (wl *WorkflowList) showSignalWithStart() {
+	modal := components.NewModal(components.ModalConfig{
+		Title:    fmt.Sprintf("%s Signal With Start (%s)", theme.IconInfo, wl.namespace),
+		Width:    70,
+		Height:   20,
+		Backdrop: true,
+	})
+
+	form := components.NewForm()
+	form.AddTextField("workflowId", "Workflow ID", "")
+	form.AddTextField("workflowType", "Workflow Type", "")
+	form.AddTextField("taskQueue", "Task Queue", "")
+	form.AddTextField("signalName", "Signal Name", "")
+	form.AddTextField("signalInput", "Signal Input (JSON, optional)", "")
+	form.AddTextField("workflowInput", "Workflow Input (JSON, optional)", "")
+	form.SetOnSubmit(func(values map[string]any) {
+		workflowID := values["workflowId"].(string)
+		workflowType := values["workflowType"].(string)
+		taskQueue := values["taskQueue"].(string)
+		signalName := values["signalName"].(string)
+		signalInput := values["signalInput"].(string)
+		workflowInput := values["workflowInput"].(string)
+
+		// Validate required fields
+		if workflowID == "" || workflowType == "" || taskQueue == "" || signalName == "" {
+			return
+		}
+
+		wl.closeModal("signal-with-start")
+		wl.executeSignalWithStart(workflowID, workflowType, taskQueue, signalName, signalInput, workflowInput)
+	})
+	form.SetOnCancel(func() {
+		wl.closeModal("signal-with-start")
+	})
+
+	modal.SetContent(form)
+	modal.SetHints([]components.KeyHint{
+		{Key: "Tab", Description: "Next field"},
+		{Key: "Enter", Description: "Execute"},
+		{Key: "Esc", Description: "Cancel"},
+	})
+	modal.SetOnSubmit(func() {
+		values := form.GetValues()
+		workflowID := values["workflowId"].(string)
+		workflowType := values["workflowType"].(string)
+		taskQueue := values["taskQueue"].(string)
+		signalName := values["signalName"].(string)
+		signalInput := values["signalInput"].(string)
+		workflowInput := values["workflowInput"].(string)
+
+		if workflowID == "" || workflowType == "" || taskQueue == "" || signalName == "" {
+			return
+		}
+
+		wl.closeModal("signal-with-start")
+		wl.executeSignalWithStart(workflowID, workflowType, taskQueue, signalName, signalInput, workflowInput)
+	})
+	modal.SetOnCancel(func() {
+		wl.closeModal("signal-with-start")
+	})
+
+	wl.app.JigApp().Pages().AddPage("signal-with-start", modal, true, true)
+	wl.app.JigApp().SetFocus(form)
+}
+
+// executeSignalWithStart performs the SignalWithStart operation asynchronously.
+func (wl *WorkflowList) executeSignalWithStart(workflowID, workflowType, taskQueue, signalName, signalInput, workflowInput string) {
+	provider := wl.app.Provider()
+	if provider == nil {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		req := temporal.SignalWithStartRequest{
+			WorkflowID:   workflowID,
+			WorkflowType: workflowType,
+			TaskQueue:    taskQueue,
+			SignalName:   signalName,
+		}
+
+		if signalInput != "" {
+			req.SignalInput = []byte(signalInput)
+		}
+		if workflowInput != "" {
+			req.WorkflowInput = []byte(workflowInput)
+		}
+
+		runID, err := provider.SignalWithStartWorkflow(ctx, wl.namespace, req)
+
+		wl.app.JigApp().QueueUpdateDraw(func() {
+			if err != nil {
+				ShowErrorModal(wl.app.JigApp(), "SignalWithStart Failed", err.Error())
+				return
+			}
+
+			ShowInfoModal(wl.app.JigApp(), "SignalWithStart Successful",
+				fmt.Sprintf("Workflow: %s\nRun ID: %s", workflowID, runID))
+			wl.loadData() // Refresh the workflow list
+		})
+	}()
 }

@@ -77,7 +77,7 @@ func (eh *EventHistory) setup() {
 	eh.SetBackgroundColor(theme.Bg())
 
 	// Configure list view table
-	eh.table.SetHeaders("ID", "TIME", "TYPE", "DETAILS")
+	eh.table.SetHeaders("ID", "TIME", "TYPE", "NAME", "DETAILS")
 	eh.table.SetBorder(false)
 	eh.table.SetBackgroundColor(theme.Bg())
 
@@ -302,31 +302,47 @@ func (eh *EventHistory) populateTable() {
 	currentRow := eh.table.SelectedRow()
 
 	eh.table.ClearRows()
-	eh.table.SetHeaders("ID", "TIME", "TYPE", "DETAILS")
+	eh.table.SetHeaders("ID", "TIME", "TYPE", "NAME", "DETAILS")
 
-	for _, ev := range eh.events {
+	for _, ev := range eh.enhancedEvents {
 		icon := eventIcon(ev.Type)
 		color := eventColor(ev.Type)
+		name := getEventName(&ev)
 		eh.table.AddRowWithColor(color,
 			fmt.Sprintf("%d", ev.ID),
 			ev.Time.Format("15:04:05"),
 			icon+" "+ev.Type,
+			name,
 			truncate(ev.Details, 40),
 		)
 	}
 
 	if eh.table.RowCount() > 0 {
 		// Restore previous selection if valid, otherwise select first row
-		if currentRow >= 0 && currentRow < len(eh.events) {
+		if currentRow >= 0 && currentRow < len(eh.enhancedEvents) {
 			eh.table.SelectRow(currentRow)
 			eh.updateSidePanelFromList(currentRow)
 		} else {
 			eh.table.SelectRow(0)
-			if len(eh.events) > 0 {
+			if len(eh.enhancedEvents) > 0 {
 				eh.updateSidePanelFromList(0)
 			}
 		}
 	}
+}
+
+// getEventName returns the activity type, timer ID, or child workflow type for an event.
+func getEventName(ev *temporal.EnhancedHistoryEvent) string {
+	if ev.ActivityType != "" {
+		return ev.ActivityType
+	}
+	if ev.TimerID != "" {
+		return "Timer: " + ev.TimerID
+	}
+	if ev.ChildWorkflowType != "" {
+		return ev.ChildWorkflowType
+	}
+	return ""
 }
 
 func (eh *EventHistory) populateTreeView() {
@@ -342,11 +358,12 @@ func (eh *EventHistory) populateTimelineView() {
 
 func (eh *EventHistory) showError(err error) {
 	eh.table.ClearRows()
-	eh.table.SetHeaders("ID", "TIME", "TYPE", "DETAILS")
+	eh.table.SetHeaders("ID", "TIME", "TYPE", "NAME", "DETAILS")
 	eh.table.AddRowWithColor(theme.Error(),
 		"",
 		"",
 		theme.IconError+" Error loading events",
+		"",
 		err.Error(),
 	)
 }
@@ -357,23 +374,35 @@ func (eh *EventHistory) toggleSidePanel() {
 }
 
 func (eh *EventHistory) updateSidePanelFromList(index int) {
-	if index < 0 || index >= len(eh.events) {
+	if index < 0 || index >= len(eh.enhancedEvents) {
 		return
 	}
 
-	ev := eh.events[index]
+	ev := eh.enhancedEvents[index]
 	icon := eventIcon(ev.Type)
 	colorTag := eventColorTag(ev.Type)
 
 	// Pretty print details if it contains JSON
 	formattedDetails := formatSidePanelDetails(ev.Details)
 
+	// Build name section if applicable
+	var nameSection string
+	name := getEventName(&ev)
+	if name != "" {
+		nameSection = fmt.Sprintf(`
+
+[%s::b]Name[-:-:-]
+[%s]%s[-]`,
+			theme.TagAccent(),
+			theme.TagFg(), name)
+	}
+
 	text := fmt.Sprintf(`
 [%s::b]Event ID[-:-:-]
 [%s]%d[-]
 
 [%s::b]Type[-:-:-]
-[%s]%s %s[-]
+[%s]%s %s[-]%s
 
 [%s::b]Time[-:-:-]
 [%s]%s[-]
@@ -383,7 +412,7 @@ func (eh *EventHistory) updateSidePanelFromList(index int) {
 		theme.TagAccent(),
 		theme.TagFg(), ev.ID,
 		theme.TagAccent(),
-		colorTag, icon, ev.Type,
+		colorTag, icon, ev.Type, nameSection,
 		theme.TagAccent(),
 		theme.TagFg(), ev.Time.Format("2006-01-02 15:04:05.000"),
 		theme.TagAccent(),
@@ -760,7 +789,7 @@ func (eh *EventHistory) refreshSidePanel() {
 	switch eh.viewMode {
 	case ViewModeList:
 		row := eh.table.SelectedRow()
-		if row >= 0 && row < len(eh.events) {
+		if row >= 0 && row < len(eh.enhancedEvents) {
 			eh.updateSidePanelFromList(row)
 		}
 	case ViewModeTree:

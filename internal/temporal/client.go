@@ -257,6 +257,10 @@ func (c *Client) Config() ConnectionConfig {
 
 // ListNamespaces returns all namespaces visible to the client.
 func (c *Client) ListNamespaces(ctx context.Context) ([]Namespace, error) {
+	if c.client == nil {
+		return nil, fmt.Errorf("client not connected")
+	}
+
 	var namespaces []Namespace
 	var nextPageToken []byte
 
@@ -452,6 +456,10 @@ func formatArchivalState(state enums.ArchivalState, uri string) string {
 
 // ListWorkflows returns workflows for a namespace with optional filtering.
 func (c *Client) ListWorkflows(ctx context.Context, namespace string, opts ListOptions) ([]Workflow, string, error) {
+	if c.client == nil {
+		return nil, "", fmt.Errorf("client not connected")
+	}
+
 	pageSize := opts.PageSize
 	if pageSize <= 0 {
 		pageSize = 100
@@ -518,6 +526,10 @@ func (c *Client) ListWorkflows(ctx context.Context, namespace string, opts ListO
 
 // GetWorkflow returns details for a specific workflow execution.
 func (c *Client) GetWorkflow(ctx context.Context, namespace, workflowID, runID string) (*Workflow, error) {
+	if c.client == nil {
+		return nil, fmt.Errorf("client not connected")
+	}
+
 	resp, err := c.client.WorkflowService().DescribeWorkflowExecution(ctx, &workflowservice.DescribeWorkflowExecutionRequest{
 		Namespace: namespace,
 		Execution: &commonpb.WorkflowExecution{
@@ -617,6 +629,10 @@ func (c *Client) getWorkflowInputOutput(ctx context.Context, namespace, workflow
 
 // GetWorkflowHistory returns the event history for a workflow execution.
 func (c *Client) GetWorkflowHistory(ctx context.Context, namespace, workflowID, runID string) ([]HistoryEvent, error) {
+	if c.client == nil {
+		return nil, fmt.Errorf("client not connected")
+	}
+
 	var events []HistoryEvent
 	var nextPageToken []byte
 
@@ -654,6 +670,10 @@ func (c *Client) GetWorkflowHistory(ctx context.Context, namespace, workflowID, 
 
 // GetEnhancedWorkflowHistory returns event history with relational data for tree/timeline views.
 func (c *Client) GetEnhancedWorkflowHistory(ctx context.Context, namespace, workflowID, runID string) ([]EnhancedHistoryEvent, error) {
+	if c.client == nil {
+		return nil, fmt.Errorf("client not connected")
+	}
+
 	var events []EnhancedHistoryEvent
 	var nextPageToken []byte
 
@@ -1479,6 +1499,28 @@ func (c *Client) TerminateWorkflow(ctx context.Context, namespace, workflowID, r
 // SignalWorkflow sends a signal to a running workflow execution.
 func (c *Client) SignalWorkflow(ctx context.Context, namespace, workflowID, runID, signalName string, input []byte) error {
 	return c.client.SignalWorkflow(ctx, workflowID, runID, signalName, input)
+}
+
+// SignalWithStartWorkflow starts a workflow if it doesn't exist and sends a signal to it.
+func (c *Client) SignalWithStartWorkflow(ctx context.Context, namespace string, req SignalWithStartRequest) (string, error) {
+	opts := client.StartWorkflowOptions{
+		ID:        req.WorkflowID,
+		TaskQueue: req.TaskQueue,
+	}
+
+	run, err := c.client.SignalWithStartWorkflow(
+		ctx,
+		req.WorkflowID,
+		req.SignalName,
+		req.SignalInput,
+		opts,
+		req.WorkflowType,
+		req.WorkflowInput,
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to signal with start workflow: %w", err)
+	}
+	return run.GetRunID(), nil
 }
 
 // DeleteWorkflow permanently deletes a workflow execution and its history.

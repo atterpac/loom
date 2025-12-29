@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/atterpac/jig/components"
+	"github.com/atterpac/jig/layout"
 	"github.com/atterpac/jig/theme"
 	"github.com/atterpac/jig/theme/themes"
 	"github.com/atterpac/jig/util"
@@ -521,12 +522,12 @@ func (f *ProfileForm) SetProfile(name string, cfg config.ConnectionConfig) {
 	f.form.AddTextField("tlsCA", "TLS CA Path (optional)", cfg.TLS.CA)
 	f.form.AddTextField("tlsServerName", "TLS Server Name (optional)", cfg.TLS.ServerName)
 
-	skipVerifyDefault := "No"
-	if cfg.TLS.SkipVerify {
-		skipVerifyDefault = "Yes"
-	}
-	_ = skipVerifyDefault // Used below
 	f.form.AddSelect("tlsSkipVerify", "Skip TLS Verify", []string{"No", "Yes"})
+
+	// Set default value for TLS skip verify
+	if cfg.TLS.SkipVerify {
+		_ = f.form.SetValues(map[string]any{"tlsSkipVerify": "Yes"})
+	}
 
 	f.form.SetOnSubmit(func(values map[string]any) {
 		saveName := name
@@ -568,7 +569,7 @@ func (f *ProfileForm) SetOnSave(fn func(string, config.ConnectionConfig)) { f.on
 func (f *ProfileForm) SetOnCancel(fn func())                              { f.onCancel = fn }
 
 func (f *ProfileForm) Focus(delegate func(p tview.Primitive)) {
-	delegate(f.form)
+	f.form.Focus(delegate)
 }
 
 // Helper function to truncate string in the middle
@@ -754,6 +755,32 @@ func (m *InfoModal) InputHandler() func(*tcell.EventKey, func(tview.Primitive)) 
 			m.onClose()
 		}
 	})
+}
+
+// ShowErrorModal displays an error modal and handles cleanup on close.
+func ShowErrorModal(app *layout.App, title, message string) {
+	modal := NewErrorModal(title, message)
+	modal.SetOnClose(func() {
+		app.Pages().RemovePage("error-modal")
+		if current := app.Pages().Current(); current != nil {
+			app.SetFocus(current)
+		}
+	})
+	app.Pages().AddPage("error-modal", modal, true, true)
+	app.SetFocus(modal)
+}
+
+// ShowInfoModal displays an info modal and handles cleanup on close.
+func ShowInfoModal(app *layout.App, title, message string) {
+	modal := NewInfoModal(title, message)
+	modal.SetOnClose(func() {
+		app.Pages().RemovePage("info-modal")
+		if current := app.Pages().Current(); current != nil {
+			app.SetFocus(current)
+		}
+	})
+	app.Pages().AddPage("info-modal", modal, true, true)
+	app.SetFocus(modal)
 }
 
 // SplashTestView displays a full-screen splash for testing themes and gradients.

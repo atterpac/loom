@@ -1054,6 +1054,7 @@ func (a *App) ShowFilterMode(initialText string, callbacks FilterModeCallbacks) 
 // ExitFilterMode exits filter mode and restores default command bar behavior.
 func (a *App) ExitFilterMode() {
 	if a.statusBar.IsCommandMode() {
+		a.statusBar.ClearSuggestion()
 		a.statusBar.ExitCommandMode()
 	}
 	filterModeCallbacks = nil
@@ -1062,6 +1063,12 @@ func (a *App) ExitFilterMode() {
 	if current := a.app.Pages().Current(); current != nil {
 		a.app.SetFocus(current)
 	}
+}
+
+// SetFilterSuggestion sets the inline ghost text suggestion for the filter input.
+// The suggestion should be the full text (what the user typed + completion).
+func (a *App) SetFilterSuggestion(suggestion string) {
+	a.statusBar.SetSuggestion(suggestion)
 }
 
 // IsFilterMode returns whether filter mode is active.

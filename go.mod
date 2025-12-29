@@ -3,7 +3,7 @@ module github.com/atterpac/tempo
 go 1.25.2
 
 require (
-	github.com/atterpac/jig v0.0.0
+	github.com/atterpac/jig v0.0.2
 	github.com/gdamore/tcell/v2 v2.13.4
 	github.com/rivo/tview v0.42.0
 	go.temporal.io/api v1.59.0
@@ -11,7 +11,7 @@ require (
 	google.golang.org/protobuf v1.36.6
 )
 
-replace github.com/atterpac/jig => ../jig
+// replace github.com/atterpac/jig => ../jig
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect

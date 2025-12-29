@@ -78,6 +78,10 @@ type Provider interface {
 	// SignalWorkflow sends a signal to a running workflow execution.
 	SignalWorkflow(ctx context.Context, namespace, workflowID, runID, signalName string, input []byte) error
 
+	// SignalWithStartWorkflow starts a workflow if it doesn't exist and sends a signal to it.
+	// Returns the run ID of the workflow.
+	SignalWithStartWorkflow(ctx context.Context, namespace string, req SignalWithStartRequest) (string, error)
+
 	// DeleteWorkflow permanently deletes a workflow execution and its history.
 	DeleteWorkflow(ctx context.Context, namespace, workflowID, runID string) error
 
@@ -304,4 +308,14 @@ type ResetPoint struct {
 	Timestamp   time.Time
 	Description string // Human-readable description (e.g., "Activity 'ProcessPayment' failed")
 	Reason      string // Why this is a valid reset point
+}
+
+// SignalWithStartRequest contains parameters for starting a workflow with a signal.
+type SignalWithStartRequest struct {
+	WorkflowID    string
+	WorkflowType  string
+	TaskQueue     string
+	SignalName    string
+	SignalInput   []byte // JSON-encoded signal input
+	WorkflowInput []byte // JSON-encoded workflow input
 }
