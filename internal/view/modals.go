@@ -515,19 +515,29 @@ func (f *ProfileForm) SetProfile(name string, cfg config.ConnectionConfig) {
 	} else {
 		f.form.AddTextField("name", "Profile Name", "")
 	}
-	f.form.AddTextField("address", "Server Address", cfg.Address)
-	f.form.AddTextField("namespace", "Default Namespace", cfg.Namespace)
-	f.form.AddTextField("tlsCert", "TLS Cert Path (optional)", cfg.TLS.Cert)
-	f.form.AddTextField("tlsKey", "TLS Key Path (optional)", cfg.TLS.Key)
-	f.form.AddTextField("tlsCA", "TLS CA Path (optional)", cfg.TLS.CA)
-	f.form.AddTextField("tlsServerName", "TLS Server Name (optional)", cfg.TLS.ServerName)
+	f.form.AddTextField("address", "Server Address", "localhost:7233")
+	f.form.AddTextField("namespace", "Default Namespace", "default")
+	f.form.AddTextField("tlsCert", "TLS Cert Path (optional)", "")
+	f.form.AddTextField("tlsKey", "TLS Key Path (optional)", "")
+	f.form.AddTextField("tlsCA", "TLS CA Path (optional)", "")
+	f.form.AddTextField("tlsServerName", "TLS Server Name (optional)", "")
 
 	f.form.AddSelect("tlsSkipVerify", "Skip TLS Verify", []string{"No", "Yes"})
 
-	// Set default value for TLS skip verify
-	if cfg.TLS.SkipVerify {
-		_ = f.form.SetValues(map[string]any{"tlsSkipVerify": "Yes"})
+	// Set actual values for editing (placeholders are just hints, values are the actual data)
+	values := map[string]any{
+		"address":       cfg.Address,
+		"namespace":     cfg.Namespace,
+		"tlsCert":       cfg.TLS.Cert,
+		"tlsKey":        cfg.TLS.Key,
+		"tlsCA":         cfg.TLS.CA,
+		"tlsServerName": cfg.TLS.ServerName,
+		"tlsSkipVerify": map[bool]string{true: "Yes", false: "No"}[cfg.TLS.SkipVerify],
 	}
+	if f.isEdit {
+		values["name"] = name
+	}
+	_ = f.form.SetValues(values)
 
 	f.form.SetOnSubmit(func(values map[string]any) {
 		saveName := name
