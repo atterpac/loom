@@ -1,0 +1,52 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: tempo
+    main: ./cmd/tempo
+    binary: tempo
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/atterpac/tempo/internal/update.Version={{.Version}}
+      - -X github.com/atterpac/tempo/internal/update.Commit={{.Commit}}
+      - -X github.com/atterpac/tempo/internal/update.BuildDate={{.Date}}
+
+archives:
+  - id: tempo
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+
+release:
+  github:
+    owner: atterpac
+    name: tempo
+  draft: false
+  prerelease: auto
