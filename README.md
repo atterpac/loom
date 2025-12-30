@@ -3,7 +3,7 @@
 A terminal UI client for [Temporal](https://temporal.io).
 
 <p align="center">
-  <img src="./assets/demo.gif" alt="Tempo Demo" width="800">
+  <img src="./assets/tempo-demo.gif" alt="Tempo Demo" width="800">
 </p>
 
 
