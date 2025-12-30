@@ -13,6 +13,7 @@ import (
 	"github.com/atterpac/jig/util"
 	"github.com/atterpac/tempo/internal/config"
 	"github.com/atterpac/tempo/internal/temporal"
+	"github.com/atterpac/tempo/internal/update"
 	"github.com/atterpac/tempo/internal/view"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -30,6 +31,7 @@ var (
 	tlsSkipVerify = flag.Bool("tls-skip-verify", false, "Skip TLS verification (insecure)")
 	themeNameFlag = flag.String("theme", "", "Theme name (overrides config file)")
 	devMode       = flag.Bool("dev", false, "Development mode: test splash screen with theme cycling")
+	versionFlag   = flag.Bool("version", false, "Print version information and exit")
 )
 
 const (
@@ -40,6 +42,12 @@ const (
 
 func main() {
 	flag.Parse()
+
+	// Handle version flag
+	if *versionFlag {
+		fmt.Println(update.GetVersionInfo())
+		os.Exit(0)
+	}
 
 	// Load configuration from file
 	cfg, err := config.Load()
