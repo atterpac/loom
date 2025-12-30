@@ -124,6 +124,10 @@ profiles:
 
 ## Themes
 
+<p align="center">
+  <img src="./assets/tempo-themeselect.gif" alt="Theme Selection" width="800">
+</p>
+
 26 themes are available, organized by color scheme family:
 
 **Dark Themes**
